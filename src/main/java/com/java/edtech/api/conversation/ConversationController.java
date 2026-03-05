@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.UUID;
 
 import com.java.edtech.api.conversation.dto.ConversationApiResponse;
+import com.java.edtech.api.conversation.dto.ConversationSessionPageResponse;
 import com.java.edtech.api.conversation.dto.ConversationSessionResponse;
 import com.java.edtech.api.conversation.dto.CreateConversationSessionRequest;
 import com.java.edtech.api.conversation.dto.CreateMessageRequest;
@@ -21,6 +22,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
@@ -50,6 +52,20 @@ public class ConversationController {
         log.info("API getSession success sessionId={} startedAt={} endedAt={}",
                 response.getId(), response.getStartedAt(), response.getEndedAt());
         return ResponseEntity.ok(ConversationApiResponse.ok("Conversation session fetched successfully", response));
+    }
+
+    @GetMapping("/sessions")
+    public ResponseEntity<ConversationApiResponse<ConversationSessionPageResponse>> listSessions(
+            @RequestParam(required = false) UUID robotId,
+            @RequestParam(required = false) UUID childId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size
+    ) {
+        log.info("API listSessions robotId={} childId={} page={} size={}", robotId, childId, page, size);
+        ConversationSessionPageResponse response = conversationService.listSessions(robotId, childId, page, size);
+        log.info("API listSessions success count={} total={} page={}/{}",
+                response.getItems().size(), response.getTotalElements(), response.getPage(), response.getTotalPages());
+        return ResponseEntity.ok(ConversationApiResponse.ok("Conversation sessions fetched successfully", response));
     }
 
     @PatchMapping("/sessions/{sessionId}/end")
