@@ -32,5 +32,9 @@ build/
 ### VS Code ###
 .vscode/
 /src/main/resources/static/
-/src/main/resources/
 /src/test/
+/src/main/resources/application.yml
+/local-ai/ws-response.log
+/local-ai/ws-robot-test.js
+/local-ai/
+/run-6001.log
