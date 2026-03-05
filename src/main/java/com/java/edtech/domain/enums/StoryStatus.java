@@ -1,5 +1,7 @@
 package com.java.edtech.domain.enums;
 
 public enum StoryStatus {
-  UNKNOWN
+    DRAFT,
+    PUBLISHED,
+    ARCHIVED
 }

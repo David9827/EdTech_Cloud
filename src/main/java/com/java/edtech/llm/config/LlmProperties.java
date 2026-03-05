@@ -14,4 +14,8 @@ public class LlmProperties {
     private String apiKey;
     private String baseUrl;
     private int timeoutMs = 15000;
+    private int maxRetries = 2;
+    private long retryBackoffMs = 1000;
+    private String fallbackMessage = "Xin loi con, he thong dang ban. Con thu lai sau it giay nhe";
+    private String storyFallbackMessage = "Bay gio robot ke tiep cau chuyen ngan gon nhe";
 }
