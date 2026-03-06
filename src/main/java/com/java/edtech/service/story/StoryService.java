@@ -1,12 +1,20 @@
 package com.java.edtech.service.story;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Base64;
+import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.regex.Pattern;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.java.edtech.api.story.dto.CreateStoryRequest;
 import com.java.edtech.api.story.dto.CreateStoryResponse;
 import com.java.edtech.api.story.dto.StoryPlaybackAudioChunk;
@@ -26,7 +34,9 @@ import com.java.edtech.repository.StoryRepository;
 import com.java.edtech.repository.StorySegmentRepository;
 import com.java.edtech.service.robot.TtsAudioResult;
 import com.java.edtech.service.robot.TtsService;
+import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -34,14 +44,26 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 @RequiredArgsConstructor
 public class StoryService {
-    private static final Pattern SENTENCE_SPLITTER = Pattern.compile("(?<=[.!?…])\\s+");
+    private static final Pattern SENTENCE_SPLITTER = Pattern.compile("(?<=[.!?\\u2026])\\s+");
+    private static final String REDIS_PLAYBACK_STATE_KEY_PREFIX = "story:playback:robot:";
+    private static final String REDIS_SEGMENTS_KEY_PREFIX = "story:segments:";
+    private static final String REDIS_AUDIO_KEY_PREFIX = "story:audio:segment:";
+    private static final Duration PLAYBACK_STATE_TTL = Duration.ofMinutes(30);
+    private static final Duration SEGMENTS_TTL = Duration.ofHours(6);
+    private static final Duration SEGMENT_AUDIO_TTL = Duration.ofHours(2);
 
     private final StoryRepository storyRepository;
     private final StorySegmentRepository storySegmentRepository;
     private final RobotRepository robotRepository;
     private final StoryPlaybackStateRepository storyPlaybackStateRepository;
     private final TtsService ttsService;
+    private final StringRedisTemplate stringRedisTemplate;
+    private final ObjectMapper objectMapper;
+
     private final ConcurrentHashMap<UUID, StoryPlaybackState> playbackStates = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<UUID, List<StorySegmentSnapshot>> storySegmentsCache = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<UUID, TtsAudioResult> segmentAudioCache = new ConcurrentHashMap<>();
+    private final ExecutorService playbackPrefetchExecutor = Executors.newFixedThreadPool(2);
 
     @Transactional
     public CreateStoryResponse createStory(CreateStoryRequest request) {
@@ -81,6 +103,9 @@ public class StoryService {
             );
         }
 
+        storySegmentsCache.remove(savedStory.getId());
+        stringRedisTemplate.delete(storySegmentsKey(savedStory.getId()));
+
         return CreateStoryResponse.builder()
                 .storyId(savedStory.getId())
                 .title(savedStory.getTitle())
@@ -97,17 +122,19 @@ public class StoryService {
         Story story = storyRepository.findByIdAndStatus(storyId, StoryStatus.PUBLISHED)
                 .orElseThrow(() -> new AppException(HttpStatus.NOT_FOUND, "STORY_NOT_FOUND", "Published story not found"));
 
-        StorySegment first = storySegmentRepository.findFirstByStoryIdOrderBySegmentOrderAsc(storyId)
-                .orElseThrow(() -> new AppException(HttpStatus.BAD_REQUEST, "STORY_EMPTY", "Story has no segments"));
+        List<StorySegmentSnapshot> segments = getStorySegments(storyId);
+        StorySegmentSnapshot first = segments.get(0);
 
         robot.setStatus(RobotStatus.STORY_PLAYING);
         robotRepository.save(robot);
 
-        StoryPlaybackState state = new StoryPlaybackState(storyId, first.getSegmentOrder());
+        StoryPlaybackState state = new StoryPlaybackState(storyId, first.segmentOrder());
         playbackStates.put(robotId, state);
-        savePlaybackState(robotId, story, first.getSegmentOrder());
+        savePlaybackState(robotId, story, first.segmentOrder());
 
-        return buildPlaybackResponse(robotId, story, first, false);
+        StoryPlaybackAudioChunk chunk = buildPlaybackResponse(robotId, story, first, false);
+        prefetchNextAudio(first.segmentOrder(), segments);
+        return chunk;
     }
 
     @Transactional
@@ -120,13 +147,11 @@ public class StoryService {
         Story story = storyRepository.findById(state.storyId())
                 .orElseThrow(() -> new AppException(HttpStatus.NOT_FOUND, "STORY_NOT_FOUND", "Story not found"));
 
-        StorySegment next = storySegmentRepository
-                .findFirstByStoryIdAndSegmentOrderGreaterThanOrderBySegmentOrderAsc(state.storyId(), state.currentSegmentOrder())
-                .orElse(null);
+        List<StorySegmentSnapshot> segments = getStorySegments(state.storyId());
+        StorySegmentSnapshot next = findNextSegment(segments, state.currentSegmentOrder());
 
         if (next == null) {
-            playbackStates.remove(robotId);
-            storyPlaybackStateRepository.deleteById(robotId);
+            clearPlaybackState(robotId);
             setRobotIdle(robotId);
             return StoryPlaybackAudioChunk.builder()
                     .robotId(robotId)
@@ -138,16 +163,19 @@ public class StoryService {
                     .build();
         }
 
-        StoryPlaybackState nextState = new StoryPlaybackState(state.storyId(), next.getSegmentOrder());
+        StoryPlaybackState nextState = new StoryPlaybackState(state.storyId(), next.segmentOrder());
         playbackStates.put(robotId, nextState);
-        savePlaybackState(robotId, story, next.getSegmentOrder());
-        return buildPlaybackResponse(robotId, story, next, false);
+        savePlaybackState(robotId, story, next.segmentOrder());
+
+        StoryPlaybackAudioChunk chunk = buildPlaybackResponse(robotId, story, next, false);
+        prefetchNextAudio(next.segmentOrder(), segments);
+        return chunk;
     }
 
     @Transactional
     public StoryPlaybackResponse stopPlayback(UUID robotId) {
-        StoryPlaybackState removed = playbackStates.remove(robotId);
-        storyPlaybackStateRepository.deleteById(robotId);
+        StoryPlaybackState removed = resolvePlaybackState(robotId);
+        clearPlaybackState(robotId);
         setRobotIdle(robotId);
         if (removed == null) {
             return StoryPlaybackResponse.builder()
@@ -165,17 +193,17 @@ public class StoryService {
                 .build();
     }
 
-    private StoryPlaybackAudioChunk buildPlaybackResponse(UUID robotId, Story story, StorySegment segment, boolean completed) {
-        TtsAudioResult tts = ttsService.synthesize(segment.getContent());
+    private StoryPlaybackAudioChunk buildPlaybackResponse(UUID robotId, Story story, StorySegmentSnapshot segment, boolean completed) {
+        TtsAudioResult tts = getSegmentAudio(segment);
 
         return StoryPlaybackAudioChunk.builder()
                 .robotId(robotId)
                 .storyId(story.getId())
                 .storyTitle(story.getTitle())
-                .segmentId(segment.getId())
-                .segmentOrder(segment.getSegmentOrder())
-                .content(segment.getContent())
-                .emotion(segment.getEmotion())
+                .segmentId(segment.segmentId())
+                .segmentOrder(segment.segmentOrder())
+                .content(segment.content())
+                .emotion(segment.emotion())
                 .completed(completed)
                 .audioMimeType(tts.getMimeType())
                 .sampleRate(tts.getSampleRate())
@@ -196,15 +224,24 @@ public class StoryService {
         if (inMemory != null) {
             return inMemory;
         }
+
+        StoryPlaybackState fromRedis = getPlaybackStateFromRedis(robotId);
+        if (fromRedis != null) {
+            playbackStates.put(robotId, fromRedis);
+            return fromRedis;
+        }
+
         StoryPlaybackStateEntity persisted = storyPlaybackStateRepository.findById(robotId).orElse(null);
         if (persisted == null || persisted.getStory() == null) {
             return null;
         }
+
         StoryPlaybackState recovered = new StoryPlaybackState(
                 persisted.getStory().getId(),
                 persisted.getCurrentSegmentOrder()
         );
         playbackStates.put(robotId, recovered);
+        savePlaybackStateToRedis(robotId, recovered);
         return recovered;
     }
 
@@ -214,6 +251,175 @@ public class StoryService {
         state.setStory(story);
         state.setCurrentSegmentOrder(segmentOrder);
         storyPlaybackStateRepository.save(state);
+        savePlaybackStateToRedis(robotId, new StoryPlaybackState(story.getId(), segmentOrder));
+    }
+
+    private void clearPlaybackState(UUID robotId) {
+        playbackStates.remove(robotId);
+        storyPlaybackStateRepository.deleteById(robotId);
+        stringRedisTemplate.delete(playbackStateKey(robotId));
+    }
+
+    private List<StorySegmentSnapshot> getStorySegments(UUID storyId) {
+        List<StorySegmentSnapshot> inMemory = storySegmentsCache.get(storyId);
+        if (inMemory != null && !inMemory.isEmpty()) {
+            return inMemory;
+        }
+
+        List<StorySegmentSnapshot> fromRedis = getStorySegmentsFromRedis(storyId);
+        if (fromRedis != null && !fromRedis.isEmpty()) {
+            storySegmentsCache.put(storyId, fromRedis);
+            return fromRedis;
+        }
+
+        List<StorySegment> segments = storySegmentRepository.findByStoryIdOrderBySegmentOrderAsc(storyId);
+        if (segments.isEmpty()) {
+            throw new AppException(HttpStatus.BAD_REQUEST, "STORY_EMPTY", "Story has no segments");
+        }
+
+        List<StorySegmentSnapshot> loaded = segments.stream()
+                .sorted(Comparator.comparing(StorySegment::getSegmentOrder))
+                .map(segment -> new StorySegmentSnapshot(
+                        segment.getId(),
+                        segment.getSegmentOrder(),
+                        segment.getContent(),
+                        segment.getEmotion()
+                ))
+                .toList();
+
+        storySegmentsCache.put(storyId, loaded);
+        saveStorySegmentsToRedis(storyId, loaded);
+        return loaded;
+    }
+
+    private StorySegmentSnapshot findNextSegment(List<StorySegmentSnapshot> segments, Integer currentOrder) {
+        for (StorySegmentSnapshot segment : segments) {
+            if (segment.segmentOrder() > currentOrder) {
+                return segment;
+            }
+        }
+        return null;
+    }
+
+    private void prefetchNextAudio(Integer currentOrder, List<StorySegmentSnapshot> segments) {
+        StorySegmentSnapshot next = findNextSegment(segments, currentOrder);
+        if (next == null || segmentAudioCache.containsKey(next.segmentId())) {
+            return;
+        }
+        CompletableFuture.runAsync(() -> getSegmentAudio(next), playbackPrefetchExecutor);
+    }
+
+    private TtsAudioResult getSegmentAudio(StorySegmentSnapshot segment) {
+        TtsAudioResult inMemory = segmentAudioCache.get(segment.segmentId());
+        if (inMemory != null) {
+            return inMemory;
+        }
+
+        TtsAudioResult fromRedis = getSegmentAudioFromRedis(segment.segmentId());
+        if (fromRedis != null) {
+            segmentAudioCache.put(segment.segmentId(), fromRedis);
+            return fromRedis;
+        }
+
+        TtsAudioResult generated = ttsService.synthesize(segment.content());
+        segmentAudioCache.put(segment.segmentId(), generated);
+        saveSegmentAudioToRedis(segment.segmentId(), generated);
+        return generated;
+    }
+
+    private void savePlaybackStateToRedis(UUID robotId, StoryPlaybackState state) {
+        try {
+            String payload = objectMapper.writeValueAsString(state);
+            stringRedisTemplate.opsForValue().set(playbackStateKey(robotId), payload, PLAYBACK_STATE_TTL);
+        } catch (Exception ignored) {
+        }
+    }
+
+    private StoryPlaybackState getPlaybackStateFromRedis(UUID robotId) {
+        try {
+            String payload = stringRedisTemplate.opsForValue().get(playbackStateKey(robotId));
+            if (payload == null || payload.isBlank()) {
+                return null;
+            }
+            return objectMapper.readValue(payload, StoryPlaybackState.class);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private void saveStorySegmentsToRedis(UUID storyId, List<StorySegmentSnapshot> segments) {
+        try {
+            String payload = objectMapper.writeValueAsString(segments);
+            stringRedisTemplate.opsForValue().set(storySegmentsKey(storyId), payload, SEGMENTS_TTL);
+        } catch (Exception ignored) {
+        }
+    }
+
+    private List<StorySegmentSnapshot> getStorySegmentsFromRedis(UUID storyId) {
+        try {
+            String payload = stringRedisTemplate.opsForValue().get(storySegmentsKey(storyId));
+            if (payload == null || payload.isBlank()) {
+                return null;
+            }
+            return objectMapper.readValue(payload, new TypeReference<List<StorySegmentSnapshot>>() {
+            });
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private void saveSegmentAudioToRedis(UUID segmentId, TtsAudioResult audio) {
+        try {
+            if (audio == null || audio.getAudioBytes() == null || audio.getAudioBytes().length == 0) {
+                return;
+            }
+
+            SegmentAudioCachePayload payload = new SegmentAudioCachePayload(
+                    Base64.getEncoder().encodeToString(audio.getAudioBytes()),
+                    audio.getMimeType(),
+                    audio.getSampleRate(),
+                    audio.getChannels()
+            );
+
+            String serialized = objectMapper.writeValueAsString(payload);
+            stringRedisTemplate.opsForValue().set(segmentAudioKey(segmentId), serialized, SEGMENT_AUDIO_TTL);
+        } catch (Exception ignored) {
+        }
+    }
+
+    private TtsAudioResult getSegmentAudioFromRedis(UUID segmentId) {
+        try {
+            String payload = stringRedisTemplate.opsForValue().get(segmentAudioKey(segmentId));
+            if (payload == null || payload.isBlank()) {
+                return null;
+            }
+
+            SegmentAudioCachePayload cached = objectMapper.readValue(payload, SegmentAudioCachePayload.class);
+            if (cached.audioBase64() == null || cached.audioBase64().isBlank()) {
+                return null;
+            }
+
+            return TtsAudioResult.builder()
+                    .audioBytes(Base64.getDecoder().decode(cached.audioBase64()))
+                    .mimeType(cached.mimeType())
+                    .sampleRate(cached.sampleRate())
+                    .channels(cached.channels())
+                    .build();
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private String playbackStateKey(UUID robotId) {
+        return REDIS_PLAYBACK_STATE_KEY_PREFIX + robotId;
+    }
+
+    private String storySegmentsKey(UUID storyId) {
+        return REDIS_SEGMENTS_KEY_PREFIX + storyId;
+    }
+
+    private String segmentAudioKey(UUID segmentId) {
+        return REDIS_AUDIO_KEY_PREFIX + segmentId;
     }
 
     private int normalizeMaxSegmentChars(Integer value) {
@@ -258,6 +464,7 @@ public class StoryService {
                 current.append(sentence);
             }
         }
+
         flushCurrent(chunks, current);
         return chunks;
     }
@@ -290,6 +497,18 @@ public class StoryService {
         }
     }
 
+    @PreDestroy
+    void shutdownPrefetchExecutor() {
+        playbackPrefetchExecutor.shutdown();
+    }
+
+    private record StorySegmentSnapshot(UUID segmentId, Integer segmentOrder, String content, EmotionType emotion) {
+    }
+
+    private record SegmentAudioCachePayload(String audioBase64, String mimeType, Integer sampleRate, Integer channels) {
+    }
+
     private record StoryPlaybackState(UUID storyId, Integer currentSegmentOrder) {
     }
 }
+
