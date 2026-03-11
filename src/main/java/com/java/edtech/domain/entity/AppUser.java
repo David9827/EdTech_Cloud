@@ -39,6 +39,9 @@ public class AppUser {
     @Column(name = "full_name", length = 150)
     private String fullName;
 
+    @Column(name = "avatar_url", length = 500)
+    private String avatarUrl;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, columnDefinition = "user_role")
     @JdbcTypeCode(SqlTypes.NAMED_ENUM)

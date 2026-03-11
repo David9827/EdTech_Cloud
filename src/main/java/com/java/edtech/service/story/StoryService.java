@@ -193,6 +193,40 @@ public class StoryService {
                 .build();
     }
 
+    @Transactional(readOnly = true)
+    public StoryQaContext getQaContext(UUID robotId, int recentSegmentCount) {
+        StoryPlaybackState state = resolvePlaybackState(robotId);
+        if (state == null) {
+            return null;
+        }
+
+        Story story = storyRepository.findById(state.storyId()).orElse(null);
+        if (story == null) {
+            return null;
+        }
+
+        List<StorySegmentSnapshot> segments = getStorySegments(state.storyId());
+        List<String> visibleSegments = segments.stream()
+                .filter(segment -> segment.segmentOrder() <= state.currentSegmentOrder())
+                .map(segment -> "Doan " + segment.segmentOrder() + ": " + segment.content())
+                .toList();
+
+        if (visibleSegments.isEmpty()) {
+            return null;
+        }
+
+        int safeRecentCount = Math.max(1, Math.min(10, recentSegmentCount));
+        int fromIndex = Math.max(0, visibleSegments.size() - safeRecentCount);
+        String context = String.join("\n", visibleSegments.subList(fromIndex, visibleSegments.size()));
+
+        return StoryQaContext.builder()
+                .storyId(story.getId())
+                .storyTitle(story.getTitle())
+                .currentSegmentOrder(state.currentSegmentOrder())
+                .recentContext(context)
+                .build();
+    }
+
     private StoryPlaybackAudioChunk buildPlaybackResponse(UUID robotId, Story story, StorySegmentSnapshot segment, boolean completed) {
         TtsAudioResult tts = getSegmentAudio(segment);
 

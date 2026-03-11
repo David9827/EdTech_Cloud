@@ -28,6 +28,10 @@ public class LlmService {
         return generateWithMode(LlmMode.STORY, storyInput);
     }
 
+    public LlmResponse generateStoryQaReply(String storyQaInput) {
+        return generateWithMode(LlmMode.STORY_QA, storyQaInput);
+    }
+
     private LlmResponse generateWithMode(LlmMode mode, String input) {
         LlmResponse response = new LlmResponse();
         response.setProvider(llmProperties.getProvider());
@@ -71,7 +75,7 @@ public class LlmService {
             }
         }
 
-        String fallback = mode == LlmMode.STORY
+        String fallback = (mode == LlmMode.STORY || mode == LlmMode.STORY_QA)
                 ? llmProperties.getStoryFallbackMessage()
                 : llmProperties.getFallbackMessage();
 

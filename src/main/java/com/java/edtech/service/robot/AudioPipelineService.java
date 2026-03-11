@@ -4,6 +4,7 @@ import com.java.edtech.websocket.dto.AudioFormat;
 
 public interface AudioPipelineService {
     AudioPipelineResult processAudio(String sessionId,
+                                     String robotId,
                                      String utteranceId,
                                      byte[] compressedAudioBytes,
                                      Integer sampleRate,

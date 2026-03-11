@@ -93,6 +93,7 @@ public class RobotWebSocketHandler extends AbstractWebSocketHandler {
                 }
                 AudioPipelineResult result = audioPipelineService.processAudio(
                         state.getSessionId(),
+                        state.getRobotId(),
                         state.getUtteranceId(),
                         state.getAudioBytes(),
                         state.getSampleRate(),

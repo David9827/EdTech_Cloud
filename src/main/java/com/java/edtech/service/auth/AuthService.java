@@ -107,6 +107,7 @@ public class AuthService {
         userInfo.setId(user.getId().toString());
         userInfo.setEmail(user.getEmail());
         userInfo.setRole(user.getRole().name());
+        userInfo.setAvatarUrl(user.getAvatarUrl());
         data.setUser(userInfo);
 
         response.setData(data);
