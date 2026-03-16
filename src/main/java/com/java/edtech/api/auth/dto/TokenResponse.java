@@ -29,10 +29,11 @@ public class TokenResponse {
     }
 
     @Data
-    @JsonPropertyOrder({"id", "email", "role", "avatarUrl"})
+    @JsonPropertyOrder({"id", "email", "fullName", "role", "avatarUrl"})
     public static class UserInfo {
         private String id;
         private String email;
+        private String fullName;
         private String role;
         private String avatarUrl;
     }

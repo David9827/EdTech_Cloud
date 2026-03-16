@@ -8,6 +8,7 @@ import com.java.edtech.api.conversation.dto.ConversationSessionPageResponse;
 import com.java.edtech.api.conversation.dto.ConversationSessionResponse;
 import com.java.edtech.api.conversation.dto.CreateConversationSessionRequest;
 import com.java.edtech.api.conversation.dto.CreateMessageRequest;
+import com.java.edtech.api.conversation.dto.MessagePageResponse;
 import com.java.edtech.api.conversation.dto.MessageResponse;
 import com.java.edtech.service.conversation.ConversationService;
 import com.java.edtech.service.conversation.MessageService;
@@ -95,5 +96,18 @@ public class ConversationController {
         List<MessageResponse> response = messageService.getSessionMessages(sessionId);
         log.info("API getMessages success sessionId={} count={}", sessionId, response.size());
         return ResponseEntity.ok(ConversationApiResponse.ok("Conversation messages fetched successfully", response));
+    }
+
+    @GetMapping("/messages")
+    public ResponseEntity<ConversationApiResponse<MessagePageResponse>> listMessagesByRobot(
+            @RequestParam UUID robotId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size
+    ) {
+        log.info("API listMessagesByRobot robotId={} page={} size={}", robotId, page, size);
+        MessagePageResponse response = messageService.listMessagesByRobot(robotId, page, size);
+        log.info("API listMessagesByRobot success robotId={} count={} total={} page={}/{}",
+                robotId, response.getItems().size(), response.getTotalElements(), response.getPage(), response.getTotalPages());
+        return ResponseEntity.ok(ConversationApiResponse.ok("Robot messages fetched successfully", response));
     }
 }

@@ -60,7 +60,9 @@ public class UserService {
         UserProfileResponse response = new UserProfileResponse();
         response.setId(user.getId().toString());
         response.setEmail(user.getEmail());
+        response.setPhone(user.getPhone());
         response.setFullName(user.getFullName());
+        response.setBio(user.getBio());
         response.setAvatarUrl(user.getAvatarUrl());
         response.setRole(user.getRole() == null ? null : user.getRole().name());
         response.setActive(user.isActive());

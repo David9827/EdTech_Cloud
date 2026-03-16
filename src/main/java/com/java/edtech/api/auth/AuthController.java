@@ -13,6 +13,7 @@ import com.java.edtech.api.auth.dto.RefreshRequest;
 import com.java.edtech.api.auth.dto.TokenResponse;
 import com.java.edtech.service.auth.AuthService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 
 @RestController
 @RequestMapping("/api/auth")
@@ -36,5 +37,14 @@ public class AuthController {
     public ResponseEntity<TokenResponse> refresh(@Valid @RequestBody RefreshRequest request) {
         TokenResponse response = authService.refresh(request);
         return ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/logout")
+    public ResponseEntity<TokenResponse> logout() {
+        authService.logoutAll();
+        TokenResponse response = new TokenResponse();
+        response.setSuccess(true);
+        response.setMessage("Logout successful");
+        return ResponseEntity.status(HttpStatus.OK).body(response);
     }
 }

@@ -20,6 +20,9 @@ import com.java.edtech.api.story.dto.CreateStoryResponse;
 import com.java.edtech.api.story.dto.StoryPlaybackAudioChunk;
 import com.java.edtech.api.story.dto.StoryPlaybackResponse;
 import com.java.edtech.api.story.dto.StorySegmentResponse;
+import com.java.edtech.api.story.dto.StorySummaryResponse;
+import com.java.edtech.api.story.dto.StoryDraftDetailResponse;
+import com.java.edtech.api.story.dto.UpdateDraftStoryRequest;
 import com.java.edtech.common.exception.AppException;
 import com.java.edtech.domain.entity.Robot;
 import com.java.edtech.domain.entity.Story;
@@ -38,6 +41,7 @@ import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpStatus;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -74,6 +78,9 @@ public class StoryService {
         story.setTopicId(request.getTopicId());
         story.setMinAge(request.getMinAge());
         story.setMaxAge(request.getMaxAge());
+        if (request.getImgUrl() != null && !request.getImgUrl().isBlank()) {
+            story.setImgUrl(request.getImgUrl().trim());
+        }
         story.setCreatedAt(Instant.now());
         Story savedStory = storyRepository.save(story);
 
@@ -109,10 +116,138 @@ public class StoryService {
         return CreateStoryResponse.builder()
                 .storyId(savedStory.getId())
                 .title(savedStory.getTitle())
+                .imgUrl(savedStory.getImgUrl())
                 .status(savedStory.getStatus())
                 .totalSegments(segmentResponses.size())
                 .segments(segmentResponses)
                 .build();
+    }
+
+    @Transactional(readOnly = true)
+    public List<StorySummaryResponse> listStories(StoryStatus status) {
+        List<Story> stories = status == null
+                ? storyRepository.findAll(Sort.by(Sort.Direction.DESC, "createdAt"))
+                : storyRepository.findByStatusOrderByCreatedAtDesc(status);
+        return stories.stream().map(this::toSummaryResponse).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public StoryDraftDetailResponse getDraftWithContent(UUID storyId) {
+        Story story = storyRepository.findByIdAndStatus(storyId, StoryStatus.DRAFT)
+                .orElseThrow(() -> new AppException(HttpStatus.NOT_FOUND, "DRAFT_NOT_FOUND", "Draft story not found"));
+        List<StorySegmentResponse> segments = storySegmentRepository.findByStoryIdOrderBySegmentOrderAsc(storyId).stream()
+                .map(segment -> StorySegmentResponse.builder()
+                        .id(segment.getId())
+                        .segmentOrder(segment.getSegmentOrder())
+                        .content(segment.getContent())
+                        .emotion(segment.getEmotion())
+                        .build())
+                .toList();
+
+        return StoryDraftDetailResponse.builder()
+                .id(story.getId())
+                .title(story.getTitle())
+                .topicId(story.getTopicId())
+                .minAge(story.getMinAge())
+                .maxAge(story.getMaxAge())
+                .imgUrl(story.getImgUrl())
+                .status(story.getStatus())
+                .createdAt(story.getCreatedAt())
+                .segments(segments)
+                .build();
+    }
+
+    @Transactional
+    public StoryDraftDetailResponse updateDraft(UUID storyId, UpdateDraftStoryRequest request) {
+        Story story = storyRepository.findByIdAndStatus(storyId, StoryStatus.DRAFT)
+                .orElseThrow(() -> new AppException(HttpStatus.NOT_FOUND, "DRAFT_NOT_FOUND", "Draft story not found"));
+
+        if (request.getTitle() != null) {
+            String title = request.getTitle().trim();
+            if (title.isEmpty()) {
+                throw new AppException(HttpStatus.BAD_REQUEST, "TITLE_REQUIRED", "title is required");
+            }
+            story.setTitle(title);
+        }
+        if (request.getTopicId() != null) {
+            story.setTopicId(request.getTopicId());
+        }
+        if (request.getMinAge() != null) {
+            story.setMinAge(request.getMinAge());
+        }
+        if (request.getMaxAge() != null) {
+            story.setMaxAge(request.getMaxAge());
+        }
+        if (request.getImgUrl() != null) {
+            String imgUrl = request.getImgUrl().trim();
+            story.setImgUrl(imgUrl.isEmpty() ? null : imgUrl);
+        }
+        if (request.getStatus() != null) {
+            story.setStatus(request.getStatus());
+        }
+
+        boolean contentUpdated = request.getContent() != null;
+        if (contentUpdated) {
+            String content = request.getContent().trim();
+            if (content.isEmpty()) {
+                throw new AppException(HttpStatus.BAD_REQUEST, "CONTENT_REQUIRED", "content is required");
+            }
+            int maxChars = normalizeMaxSegmentChars(request.getMaxSegmentChars());
+            List<String> parts = splitStoryContent(content, maxChars);
+            if (parts.isEmpty()) {
+                throw new AppException(HttpStatus.BAD_REQUEST, "STORY_CONTENT_EMPTY", "Story content is empty after normalization");
+            }
+
+            storySegmentRepository.deleteByStoryId(storyId);
+            storySegmentRepository.flush();
+
+            int order = 1;
+            for (String part : parts) {
+                StorySegment segment = new StorySegment();
+                segment.setId(UUID.randomUUID());
+                segment.setStory(story);
+                segment.setSegmentOrder(order++);
+                segment.setContent(part);
+                segment.setEmotion(EmotionType.NEUTRAL);
+                storySegmentRepository.save(segment);
+            }
+
+            clearStorySegmentsCache(storyId);
+        }
+
+        Story saved = storyRepository.save(story);
+        List<StorySegmentResponse> segments = storySegmentRepository.findByStoryIdOrderBySegmentOrderAsc(storyId).stream()
+                .map(segment -> StorySegmentResponse.builder()
+                        .id(segment.getId())
+                        .segmentOrder(segment.getSegmentOrder())
+                        .content(segment.getContent())
+                        .emotion(segment.getEmotion())
+                        .build())
+                .toList();
+
+        return StoryDraftDetailResponse.builder()
+                .id(saved.getId())
+                .title(saved.getTitle())
+                .topicId(saved.getTopicId())
+                .minAge(saved.getMinAge())
+                .maxAge(saved.getMaxAge())
+                .imgUrl(saved.getImgUrl())
+                .status(saved.getStatus())
+                .createdAt(saved.getCreatedAt())
+                .segments(segments)
+                .build();
+    }
+
+    @Transactional(readOnly = true)
+    public List<StorySummaryResponse> searchStories(String query, StoryStatus status) {
+        if (query == null || query.isBlank()) {
+            return List.of();
+        }
+        String normalized = query.trim();
+        List<Story> stories = status == null
+                ? storyRepository.findByTitleStartingWithIgnoreCaseOrderByCreatedAtDesc(normalized)
+                : storyRepository.findByStatusAndTitleStartingWithIgnoreCaseOrderByCreatedAtDesc(status, normalized);
+        return stories.stream().map(this::toSummaryResponse).toList();
     }
 
     @Transactional
@@ -402,6 +537,11 @@ public class StoryService {
         }
     }
 
+    private void clearStorySegmentsCache(UUID storyId) {
+        storySegmentsCache.remove(storyId);
+        stringRedisTemplate.delete(storySegmentsKey(storyId));
+    }
+
     private void saveSegmentAudioToRedis(UUID segmentId, TtsAudioResult audio) {
         try {
             if (audio == null || audio.getAudioBytes() == null || audio.getAudioBytes().length == 0) {
@@ -529,6 +669,19 @@ public class StoryService {
             chunks.add(current.toString().trim());
             current.setLength(0);
         }
+    }
+
+    private StorySummaryResponse toSummaryResponse(Story story) {
+        return StorySummaryResponse.builder()
+                .id(story.getId())
+                .title(story.getTitle())
+                .topicId(story.getTopicId())
+                .minAge(story.getMinAge())
+                .maxAge(story.getMaxAge())
+                .imgUrl(story.getImgUrl())
+                .status(story.getStatus())
+                .createdAt(story.getCreatedAt())
+                .build();
     }
 
     @PreDestroy

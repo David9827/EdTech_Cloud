@@ -20,6 +20,7 @@ public class CreateStoryRequest {
     private UUID topicId;
     private Integer minAge;
     private Integer maxAge;
+    private String imgUrl;
 
     @NotNull(message = "status is required")
     private StoryStatus status = StoryStatus.PUBLISHED;

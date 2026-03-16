@@ -1,0 +1,2 @@
+ALTER TABLE robot
+    ADD COLUMN img_url VARCHAR(500);

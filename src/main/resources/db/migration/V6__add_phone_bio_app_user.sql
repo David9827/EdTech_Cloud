@@ -1,0 +1,3 @@
+ALTER TABLE app_user
+    ADD COLUMN phone VARCHAR(20) UNIQUE,
+    ADD COLUMN bio TEXT;
