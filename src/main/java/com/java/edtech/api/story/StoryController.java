@@ -9,9 +9,14 @@ import com.java.edtech.api.story.dto.NextStoryPlaybackRequest;
 import com.java.edtech.api.story.dto.StartStoryPlaybackRequest;
 import com.java.edtech.api.story.dto.StopStoryPlaybackRequest;
 import com.java.edtech.api.story.dto.StoryApiResponse;
+import com.java.edtech.api.story.dto.StoryDraftDetailResponse;
+import com.java.edtech.api.story.dto.UpdateDraftStoryRequest;
 import com.java.edtech.api.story.dto.StoryPlaybackAudioChunk;
 import com.java.edtech.api.story.dto.StoryPlaybackResponse;
 import com.java.edtech.api.story.dto.StorySegmentResponse;
+import com.java.edtech.api.story.dto.StoryListResponse;
+import com.java.edtech.api.story.dto.StorySummaryResponse;
+import com.java.edtech.domain.enums.StoryStatus;
 import com.java.edtech.service.story.StorySegmentService;
 import com.java.edtech.service.story.StoryService;
 import jakarta.validation.Valid;
@@ -20,12 +25,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 @RestController
 @RequestMapping("/api/stories")
@@ -46,6 +46,48 @@ public class StoryController {
     public ResponseEntity<StoryApiResponse<List<StorySegmentResponse>>> getStorySegments(@PathVariable UUID storyId) {
         List<StorySegmentResponse> data = storySegmentService.getSegments(storyId);
         return ResponseEntity.ok(StoryApiResponse.ok("Story segments fetched successfully", data));
+    }
+
+    @GetMapping
+    public ResponseEntity<StoryApiResponse<StoryListResponse>> listStories(
+            @RequestParam(required = false) StoryStatus status
+    ) {
+        List<StorySummaryResponse> data = storyService.listStories(status);
+        StoryListResponse payload = StoryListResponse.builder()
+                .total(data.size())
+                .items(data)
+                .build();
+        return ResponseEntity.ok(StoryApiResponse.ok("Stories fetched successfully", payload));
+    }
+
+    @GetMapping("/drafts/{storyId}")
+    public ResponseEntity<StoryApiResponse<StoryDraftDetailResponse>> getDraftWithContent(
+            @PathVariable UUID storyId
+    ) {
+        StoryDraftDetailResponse response = storyService.getDraftWithContent(storyId);
+        return ResponseEntity.ok(StoryApiResponse.ok("Draft story fetched successfully", response));
+    }
+
+    @PatchMapping("/drafts/{storyId}")
+    public ResponseEntity<StoryApiResponse<StoryDraftDetailResponse>> updateDraft(
+            @PathVariable UUID storyId,
+            @RequestBody UpdateDraftStoryRequest request
+    ) {
+        StoryDraftDetailResponse response = storyService.updateDraft(storyId, request);
+        return ResponseEntity.ok(StoryApiResponse.ok("Draft story updated successfully", response));
+    }
+
+    @GetMapping("/search")
+    public ResponseEntity<StoryApiResponse<StoryListResponse>> searchStories(
+            @RequestParam String query,
+            @RequestParam(required = false) StoryStatus status
+    ) {
+        List<StorySummaryResponse> data = storyService.searchStories(query, status);
+        StoryListResponse payload = StoryListResponse.builder()
+                .total(data.size())
+                .items(data)
+                .build();
+        return ResponseEntity.ok(StoryApiResponse.ok("Stories search completed", payload));
     }
 
     @PostMapping("/playback/start")

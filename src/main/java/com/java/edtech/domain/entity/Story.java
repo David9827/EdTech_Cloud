@@ -37,6 +37,9 @@ public class Story {
     @Column(name = "max_age")
     private Integer maxAge;
 
+    @Column(name = "img_url", length = 500)
+    private String imgUrl;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, columnDefinition = "story_status")
     @JdbcTypeCode(SqlTypes.NAMED_ENUM)

@@ -20,6 +20,9 @@ import com.java.edtech.repository.AppUserRepository;
 import com.java.edtech.repository.RefreshTokenRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
+import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
@@ -30,7 +33,8 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
 
     public TokenResponse login(LoginRequest request) {
-        AppUser user = appUserRepository.findByEmail(request.getEmail())
+        String identifier = request.getEmail();
+        AppUser user = appUserRepository.findByEmailIgnoreCaseOrPhone(identifier, identifier)
                 .orElseThrow(() -> new AppException(HttpStatus.UNAUTHORIZED, "INVALID_CREDENTIALS", "Invalid credentials"));
         if (!user.isActive()) {
             throw new AppException(HttpStatus.FORBIDDEN, "USER_INACTIVE", "User is inactive");
@@ -55,10 +59,14 @@ public class AuthService {
         appUserRepository.findByEmail(request.getEmail()).ifPresent(u -> {
             throw new AppException(HttpStatus.CONFLICT, "EMAIL_EXISTS", "Email already exists");
         });
+        appUserRepository.findByEmailIgnoreCaseOrPhone(request.getPhone(), request.getPhone()).ifPresent(u -> {
+            throw new AppException(HttpStatus.CONFLICT, "PHONE_EXISTS", "Phone already exists");
+        });
 
         AppUser user = new AppUser();
         user.setEmail(request.getEmail());
         user.setFullName(request.getFullName());
+        user.setPhone(request.getPhone());
         user.setPasswordHash(passwordEncoder.encode(request.getPassword()));
         AppUser saved = appUserRepository.save(user);
 
@@ -89,6 +97,11 @@ public class AuthService {
         return buildTokenResponse("Refresh successful", accessToken, refreshToken.getToken(), user);
     }
 
+    public void logoutAll() {
+        UUID userId = getCurrentUserId();
+        refreshTokenRepository.revokeAllByUserId(userId);
+    }
+
     private TokenResponse buildTokenResponse(String message,
                                              String accessToken,
                                              String refreshToken,
@@ -106,11 +119,25 @@ public class AuthService {
         TokenResponse.UserInfo userInfo = new TokenResponse.UserInfo();
         userInfo.setId(user.getId().toString());
         userInfo.setEmail(user.getEmail());
+        userInfo.setFullName(user.getFullName());
         userInfo.setRole(user.getRole().name());
         userInfo.setAvatarUrl(user.getAvatarUrl());
         data.setUser(userInfo);
 
         response.setData(data);
         return response;
+    }
+
+    private UUID getCurrentUserId() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || authentication.getPrincipal() == null) {
+            throw new AppException(HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", "Unauthorized");
+        }
+
+        try {
+            return UUID.fromString(authentication.getPrincipal().toString());
+        } catch (IllegalArgumentException ex) {
+            throw new AppException(HttpStatus.UNAUTHORIZED, "INVALID_TOKEN", "Invalid token");
+        }
     }
 }

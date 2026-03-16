@@ -11,6 +11,8 @@ import com.java.edtech.domain.entity.StorySegment;
 public interface StorySegmentRepository extends JpaRepository<StorySegment, UUID> {
     List<StorySegment> findByStoryIdOrderBySegmentOrderAsc(UUID storyId);
 
+    void deleteByStoryId(UUID storyId);
+
     Optional<StorySegment> findFirstByStoryIdOrderBySegmentOrderAsc(UUID storyId);
 
     Optional<StorySegment> findFirstByStoryIdAndSegmentOrderGreaterThanOrderBySegmentOrderAsc(

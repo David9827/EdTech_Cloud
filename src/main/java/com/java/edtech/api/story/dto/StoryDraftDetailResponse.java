@@ -1,5 +1,6 @@
 package com.java.edtech.api.story.dto;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -9,11 +10,14 @@ import lombok.Getter;
 
 @Getter
 @Builder
-public class CreateStoryResponse {
-    private UUID storyId;
+public class StoryDraftDetailResponse {
+    private UUID id;
     private String title;
+    private UUID topicId;
+    private Integer minAge;
+    private Integer maxAge;
     private String imgUrl;
     private StoryStatus status;
-    private int totalSegments;
+    private Instant createdAt;
     private List<StorySegmentResponse> segments;
 }

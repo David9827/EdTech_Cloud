@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.UUID;
 
 import com.java.edtech.api.conversation.dto.CreateMessageRequest;
+import com.java.edtech.api.conversation.dto.MessagePageResponse;
 import com.java.edtech.api.conversation.dto.MessageResponse;
 import com.java.edtech.domain.entity.ConversationSession;
 import com.java.edtech.domain.entity.Message;
@@ -12,6 +13,9 @@ import com.java.edtech.repository.MessageRepository;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -46,6 +50,27 @@ public class MessageService {
                 .toList();
         log.info("SERVICE getSessionMessages sessionId={} count={}", sessionId, result.size());
         return result;
+    }
+
+    @Transactional(readOnly = true)
+    public MessagePageResponse listMessagesByRobot(UUID robotId, int page, int size) {
+        int safePage = Math.max(0, page);
+        int safeSize = Math.min(100, Math.max(1, size));
+        PageRequest pageable = PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.ASC, "createdAt"));
+        Page<Message> messages = messageRepository.findByRobotId(robotId, pageable);
+        List<MessageResponse> items = messages.getContent().stream()
+                .map(this::toResponse)
+                .toList();
+        log.info("SERVICE listMessagesByRobot robotId={} count={} page={}/{}",
+                robotId, items.size(), messages.getNumber(), messages.getTotalPages());
+        return MessagePageResponse.builder()
+                .items(items)
+                .page(messages.getNumber())
+                .size(messages.getSize())
+                .totalElements(messages.getTotalElements())
+                .totalPages(messages.getTotalPages())
+                .hasNext(messages.hasNext())
+                .build();
     }
 
     @Transactional
