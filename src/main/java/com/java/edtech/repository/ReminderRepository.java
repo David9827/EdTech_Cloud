@@ -19,15 +19,11 @@ public interface ReminderRepository extends JpaRepository<Reminder, UUID> {
 
     @Query("""
             select r from Reminder r
-            where (:userId is null or r.user.id = :userId)
-              and (:robotId is null or r.robot.id = :robotId)
-              and (:status is null or r.status = :status)
+            where r.user.id = :userId
             order by r.scheduleAt desc
             """)
-    Page<Reminder> findByFilters(
+    Page<Reminder> findByUserId(
             @Param("userId") UUID userId,
-            @Param("robotId") UUID robotId,
-            @Param("status") ReminderStatus status,
             Pageable pageable
     );
 }

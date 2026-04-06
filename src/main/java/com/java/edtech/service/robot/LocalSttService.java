@@ -26,6 +26,8 @@ public class LocalSttService implements SttService {
         if (compressedAudioBytes == null || compressedAudioBytes.length == 0) {
             return "";
         }
+        String normalizedFormat = format == null ? AudioFormat.OGG_OPUS.name() : format.name();
+        final String extension = AudioFormat.PCM_16BIT.name().equals(normalizedFormat) ? "pcm" : "ogg";
 
         SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
         requestFactory.setConnectTimeout(sttProperties.getTimeoutMs());
@@ -38,7 +40,7 @@ public class LocalSttService implements SttService {
         ByteArrayResource audioResource = new ByteArrayResource(compressedAudioBytes) {
             @Override
             public String getFilename() {
-                return "audio.ogg";
+                return "audio." + extension;
             }
         };
 
@@ -46,7 +48,7 @@ public class LocalSttService implements SttService {
         form.add("audio", audioResource);
         form.add("sample_rate", sampleRate == null ? 16000 : sampleRate);
         form.add("channels", channels == null ? 1 : channels);
-        form.add("format", format == null ? "OGG_OPUS" : format.name());
+        form.add("format", normalizedFormat);
 
         try {
             Map<?, ?> response = client.post()

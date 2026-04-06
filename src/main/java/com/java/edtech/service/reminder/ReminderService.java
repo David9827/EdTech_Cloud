@@ -114,11 +114,11 @@ public class ReminderService {
     }
 
     @Transactional(readOnly = true)
-    public ReminderPageResponse listReminders(UUID userId, UUID robotId, ReminderStatus status, int page, int size) {
+    public ReminderPageResponse listReminders(UUID userId, int page, int size) {
         int safePage = Math.max(0, page);
         int safeSize = Math.min(100, Math.max(1, size));
         PageRequest pageable = PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.DESC, "scheduleAt"));
-        Page<Reminder> reminders = reminderRepository.findByFilters(userId, robotId, status, pageable);
+        Page<Reminder> reminders = reminderRepository.findByUserId(userId, pageable);
 
         return ReminderPageResponse.builder()
                 .items(reminders.getContent().stream().map(this::toResponse).toList())

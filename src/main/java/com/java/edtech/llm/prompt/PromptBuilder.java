@@ -8,6 +8,7 @@ public class PromptBuilder {
         if (mode == LlmMode.STORY) {
             return "You are a warm Vietnamese storytelling robot for children. "
                     + "Tell short, age-appropriate story parts in plain Vietnamese text only. "
+                    + "Always write Vietnamese with full diacritics, never omit accents. "
                     + "Do not use markdown, emoji, or special symbols such as **, !, @, %, #, &, $, (, ).";
         }
         if (mode == LlmMode.STORY_QA) {
@@ -15,23 +16,25 @@ public class PromptBuilder {
                     + "Use only provided story context up to current segment, never spoil future story parts. "
                     + "If question is beyond current context, say that part has not happened yet and invite child to continue story. "
                     + "Reply very briefly in plain Vietnamese text only, easy words for children. "
+                    + "Always write Vietnamese with full diacritics, never omit accents. "
                     + "End with a short transition to continue story.";
         }
         return "You are a safe and friendly Vietnamese educational robot assistant for children. "
                 + "Output must be plain Vietnamese text only. "
+                + "Always write Vietnamese with full diacritics, never omit accents. "
                 + "Do not use markdown, emoji, or special symbols such as **, !, @, %, #, &, $, (, ).";
     }
 
     public String buildUserPrompt(LlmMode mode, String input) {
         if (mode == LlmMode.STORY) {
             return "Context/story input: " + input
-                    + "\nContinue the story briefly in Vietnamese, simple words for children, plain text only.";
+                    + "\nContinue the story briefly in Vietnamese, simple words for children, plain text only, with full Vietnamese diacritics.";
         }
         if (mode == LlmMode.STORY_QA) {
             return "Story Q and A context: " + input
-                    + "\nAnswer in 1 to 3 short Vietnamese sentences, plain text only, then add one short line to continue story.";
+                    + "\nAnswer in 1 to 3 short Vietnamese sentences, plain text only, with full Vietnamese diacritics, then add one short line to continue story.";
         }
         return "Child said: " + input
-                + "\nReply briefly in Vietnamese, keep it age-appropriate, and return plain text only.";
+                + "\nReply briefly in Vietnamese, keep it age-appropriate, return plain text only, and keep full Vietnamese diacritics.";
     }
 }

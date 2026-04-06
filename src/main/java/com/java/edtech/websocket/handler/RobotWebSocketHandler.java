@@ -24,6 +24,8 @@ import com.java.edtech.websocket.session.RobotSessionManager.SessionState;
 
 @Component
 public class RobotWebSocketHandler extends AbstractWebSocketHandler {
+    private static final int TTS_WS_CHUNK_BYTES = 4096;
+
     private final ObjectMapper objectMapper;
     private final RobotSessionManager sessionManager;
     private final AudioPipelineService audioPipelineService;
@@ -68,7 +70,7 @@ public class RobotWebSocketHandler extends AbstractWebSocketHandler {
                             session,
                             request,
                             "INVALID_AUDIO_CONFIG",
-                            "Use format=OGG_OPUS, sampleRate=16000, channels=1"
+                            "Use format=OGG_OPUS or PCM_16BIT, sampleRate=16000, channels=1"
                     );
                     return;
                 }
@@ -138,7 +140,7 @@ public class RobotWebSocketHandler extends AbstractWebSocketHandler {
                     ttsStart.setAudioBytesLength(ttsAudio.getAudioBytes().length);
                     sendJson(session, ttsStart);
 
-                    session.sendMessage(new BinaryMessage(ttsAudio.getAudioBytes()));
+                    sendBinaryInChunks(session, ttsAudio.getAudioBytes());
 
                     RobotResponse ttsEnd = new RobotResponse();
                     ttsEnd.setType(RobotEventType.TTS_END);
@@ -165,7 +167,7 @@ public class RobotWebSocketHandler extends AbstractWebSocketHandler {
         if (request.getUtteranceId() == null || request.getUtteranceId().isBlank()) {
             return false;
         }
-        if (request.getFormat() != AudioFormat.OGG_OPUS) {
+        if (request.getFormat() != AudioFormat.OGG_OPUS && request.getFormat() != AudioFormat.PCM_16BIT) {
             return false;
         }
         if (request.getSampleRate() == null || request.getSampleRate() != RobotRequest.DEFAULT_SAMPLE_RATE) {
@@ -195,5 +197,20 @@ public class RobotWebSocketHandler extends AbstractWebSocketHandler {
 
     private void sendJson(WebSocketSession session, RobotResponse response) throws IOException {
         session.sendMessage(new TextMessage(objectMapper.writeValueAsString(response)));
+    }
+
+    private void sendBinaryInChunks(WebSocketSession session, byte[] audioBytes) throws IOException {
+        if (audioBytes == null || audioBytes.length == 0) {
+            return;
+        }
+
+        int offset = 0;
+        while (offset < audioBytes.length) {
+            int len = Math.min(TTS_WS_CHUNK_BYTES, audioBytes.length - offset);
+            byte[] chunk = new byte[len];
+            System.arraycopy(audioBytes, offset, chunk, 0, len);
+            session.sendMessage(new BinaryMessage(chunk));
+            offset += len;
+        }
     }
 }

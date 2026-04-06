@@ -68,9 +68,9 @@ public class DefaultAudioPipelineService implements AudioPipelineService {
     }
 
     private String buildStoryQaInput(StoryQaContext context, String question) {
-        return "Tieu de truyen: " + context.getStoryTitle()
-                + "\nDang o doan: " + context.getCurrentSegmentOrder()
-                + "\nCac doan da ke gan day:\n" + context.getRecentContext()
-                + "\nCau hoi cua be: " + question;
+        return "Tiêu đề truyện: " + context.getStoryTitle()
+                + "\nĐang ở đoạn: " + context.getCurrentSegmentOrder()
+                + "\nCác đoạn đã kể gần đây:\n" + context.getRecentContext()
+                + "\nCâu hỏi của bé: " + question;
     }
 }

@@ -7,7 +7,6 @@ import com.java.edtech.api.reminder.dto.ReminderApiResponse;
 import com.java.edtech.api.reminder.dto.ReminderExecuteDataResponse;
 import com.java.edtech.api.reminder.dto.ReminderPageResponse;
 import com.java.edtech.api.reminder.dto.ReminderResponse;
-import com.java.edtech.domain.enums.ReminderStatus;
 import com.java.edtech.service.reminder.ReminderService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -37,13 +36,11 @@ public class ReminderController {
 
     @GetMapping
     public ResponseEntity<ReminderApiResponse<ReminderPageResponse>> listReminders(
-            @RequestParam(required = false) UUID userId,
-            @RequestParam(required = false) UUID robotId,
-            @RequestParam(required = false) ReminderStatus status,
+            @RequestParam UUID userId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size
     ) {
-        ReminderPageResponse response = reminderService.listReminders(userId, robotId, status, page, size);
+        ReminderPageResponse response = reminderService.listReminders(userId, page, size);
         return ResponseEntity.ok(ReminderApiResponse.ok("Reminders fetched", response));
     }
 
