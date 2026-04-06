@@ -13,6 +13,7 @@ public class RobotRequest {
     private String sessionId;
     private String robotId;
     private String utteranceId;
+    private String targetUtteranceId;
     private AudioFormat format = AudioFormat.OGG_OPUS;
     private Integer sampleRate = DEFAULT_SAMPLE_RATE;
     private Integer channels = DEFAULT_CHANNELS;

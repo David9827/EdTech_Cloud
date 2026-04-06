@@ -23,25 +23,32 @@ public class RobotSessionManager {
     public void startUtterance(WebSocketSession session, String sessionId, String robotId, String utteranceId,
                                AudioFormat format, Integer sampleRate, Integer channels, Integer frameDurationMs) {
         SessionState state = sessions.computeIfAbsent(session.getId(), k -> new SessionState());
-        state.sessionId = sessionId;
-        state.robotId = robotId;
-        state.utteranceId = utteranceId;
-        state.format = format;
-        state.sampleRate = sampleRate;
-        state.channels = channels;
-        state.frameDurationMs = frameDurationMs;
-        state.frameCount = 0;
-        state.audioBuffer = new ByteArrayOutputStream();
+        synchronized (state) {
+            state.sessionId = sessionId;
+            state.robotId = robotId;
+            state.utteranceId = utteranceId;
+            state.format = format;
+            state.sampleRate = sampleRate;
+            state.channels = channels;
+            state.frameDurationMs = frameDurationMs;
+            state.frameCount = 0;
+            state.audioBuffer = new ByteArrayOutputStream();
+        }
     }
 
     public boolean appendAudio(WebSocketSession session, byte[] payload) {
         SessionState state = sessions.get(session.getId());
-        if (state == null || state.audioBuffer == null) {
+        if (state == null) {
             return false;
         }
-        state.audioBuffer.writeBytes(payload);
-        state.frameCount++;
-        return true;
+        synchronized (state) {
+            if (state.audioBuffer == null) {
+                return false;
+            }
+            state.audioBuffer.writeBytes(payload);
+            state.frameCount++;
+            return true;
+        }
     }
 
     public SessionState endUtterance(WebSocketSession session) {
@@ -49,10 +56,73 @@ public class RobotSessionManager {
         if (state == null) {
             return null;
         }
-        SessionState snapshot = state.copy();
-        state.audioBuffer = null;
-        state.utteranceId = null;
-        return snapshot;
+        synchronized (state) {
+            SessionState snapshot = state.copy();
+            state.audioBuffer = null;
+            state.utteranceId = null;
+            return snapshot;
+        }
+    }
+
+    public String requestCancelOutput(WebSocketSession session, String targetUtteranceId) {
+        SessionState state = sessions.computeIfAbsent(session.getId(), k -> new SessionState());
+        synchronized (state) {
+            String target = normalize(targetUtteranceId);
+            if (target == null) {
+                target = normalize(state.activeOutputUtteranceId);
+            }
+            if (target == null) {
+                return null;
+            }
+            state.cancelTargetUtteranceId = target;
+            return target;
+        }
+    }
+
+    public void markOutputStarted(WebSocketSession session, String utteranceId) {
+        SessionState state = sessions.computeIfAbsent(session.getId(), k -> new SessionState());
+        synchronized (state) {
+            state.activeOutputUtteranceId = utteranceId;
+        }
+    }
+
+    public boolean shouldCancelOutput(WebSocketSession session, String utteranceId) {
+        SessionState state = sessions.get(session.getId());
+        if (state == null) {
+            return false;
+        }
+        synchronized (state) {
+            String target = normalize(state.cancelTargetUtteranceId);
+            String current = normalize(utteranceId);
+            return target != null && current != null && target.equals(current);
+        }
+    }
+
+    public void finishOutput(WebSocketSession session, String utteranceId) {
+        SessionState state = sessions.get(session.getId());
+        if (state == null) {
+            return;
+        }
+        synchronized (state) {
+            String current = normalize(utteranceId);
+            if (current == null) {
+                return;
+            }
+            if (current.equals(normalize(state.activeOutputUtteranceId))) {
+                state.activeOutputUtteranceId = null;
+            }
+            if (current.equals(normalize(state.cancelTargetUtteranceId))) {
+                state.cancelTargetUtteranceId = null;
+            }
+        }
+    }
+
+    private static String normalize(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 
     public static class SessionState {
@@ -65,6 +135,8 @@ public class RobotSessionManager {
         private Integer frameDurationMs;
         private Integer frameCount;
         private ByteArrayOutputStream audioBuffer;
+        private String activeOutputUtteranceId;
+        private String cancelTargetUtteranceId;
 
         public String getSessionId() {
             return sessionId;

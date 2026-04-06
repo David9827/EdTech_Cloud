@@ -4,6 +4,7 @@ public class RobotResponse {
     private RobotEventType type;
     private String sessionId;
     private String utteranceId;
+    private String cancelledUtteranceId;
     private String text;
     private String errorCode;
     private String errorMessage;
@@ -42,6 +43,14 @@ public class RobotResponse {
 
     public void setText(String text) {
         this.text = text;
+    }
+
+    public String getCancelledUtteranceId() {
+        return cancelledUtteranceId;
+    }
+
+    public void setCancelledUtteranceId(String cancelledUtteranceId) {
+        this.cancelledUtteranceId = cancelledUtteranceId;
     }
 
     public String getErrorCode() {
