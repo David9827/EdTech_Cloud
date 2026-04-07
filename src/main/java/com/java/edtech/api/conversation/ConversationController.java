@@ -8,7 +8,7 @@ import com.java.edtech.api.conversation.dto.ConversationSessionPageResponse;
 import com.java.edtech.api.conversation.dto.ConversationSessionResponse;
 import com.java.edtech.api.conversation.dto.CreateConversationSessionRequest;
 import com.java.edtech.api.conversation.dto.CreateMessageRequest;
-import com.java.edtech.api.conversation.dto.MessagePageResponse;
+import com.java.edtech.api.conversation.dto.MessageCursorResponse;
 import com.java.edtech.api.conversation.dto.MessageResponse;
 import com.java.edtech.service.conversation.ConversationService;
 import com.java.edtech.service.conversation.MessageService;
@@ -78,7 +78,7 @@ public class ConversationController {
     }
 
     @PostMapping("/sessions/{sessionId}/messages")
-    public ResponseEntity<ConversationApiResponse<MessageResponse>> addMessage(
+    public ResponseEntity<MessageResponse> addMessage(
             @PathVariable UUID sessionId,
             @Valid @RequestBody CreateMessageRequest request
     ) {
@@ -87,7 +87,7 @@ public class ConversationController {
         MessageResponse response = messageService.addMessage(sessionId, request);
         log.info("API addMessage success messageId={} sessionId={} role={}",
                 response.getId(), response.getSessionId(), response.getRole());
-        return ResponseEntity.ok(ConversationApiResponse.ok("Message added successfully", response));
+        return ResponseEntity.ok(response);
     }
 
     @GetMapping("/sessions/{sessionId}/messages")
@@ -99,15 +99,15 @@ public class ConversationController {
     }
 
     @GetMapping("/messages")
-    public ResponseEntity<ConversationApiResponse<MessagePageResponse>> listMessagesByRobot(
+    public ResponseEntity<MessageCursorResponse> listMessagesByRobot(
             @RequestParam UUID robotId,
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size
+            @RequestParam(required = false) String cursor,
+            @RequestParam(defaultValue = "20") int limit
     ) {
-        log.info("API listMessagesByRobot robotId={} page={} size={}", robotId, page, size);
-        MessagePageResponse response = messageService.listMessagesByRobot(robotId, page, size);
-        log.info("API listMessagesByRobot success robotId={} count={} total={} page={}/{}",
-                robotId, response.getItems().size(), response.getTotalElements(), response.getPage(), response.getTotalPages());
-        return ResponseEntity.ok(ConversationApiResponse.ok("Robot messages fetched successfully", response));
+        log.info("API listMessagesByRobot robotId={} cursor={} limit={}", robotId, cursor, limit);
+        MessageCursorResponse response = messageService.listMessagesByRobot(robotId, cursor, limit);
+        log.info("API listMessagesByRobot success robotId={} count={} hasMore={} nextCursor={}",
+                robotId, response.getItems().size(), response.isHasMore(), response.getNextCursor());
+        return ResponseEntity.ok(response);
     }
 }

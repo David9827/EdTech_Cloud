@@ -1,9 +1,9 @@
 package com.java.edtech.repository;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
-import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
@@ -17,8 +17,28 @@ public interface MessageRepository extends JpaRepository<Message, UUID> {
     @Query("""
             select m
             from Message m
-            join m.session s
-            where s.robot.id = :robotId
+            where m.robot.id = :robotId
+            order by m.createdAt desc, m.id desc
             """)
-    Page<Message> findByRobotId(@Param("robotId") UUID robotId, Pageable pageable);
+    List<Message> findFirstPageByRobotId(
+            @Param("robotId") UUID robotId,
+            Pageable pageable
+    );
+
+    @Query("""
+            select m
+            from Message m
+            where m.robot.id = :robotId
+              and (
+                    m.createdAt < :cursorCreatedAt
+                    or (m.createdAt = :cursorCreatedAt and m.id < :cursorId)
+              )
+            order by m.createdAt desc, m.id desc
+            """)
+    List<Message> findNextPageByRobotIdBeforeCursor(
+            @Param("robotId") UUID robotId,
+            @Param("cursorCreatedAt") Instant cursorCreatedAt,
+            @Param("cursorId") UUID cursorId,
+            Pageable pageable
+    );
 }

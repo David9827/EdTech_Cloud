@@ -1,11 +1,15 @@
 package com.java.edtech.service.conversation;
 
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.util.Base64;
 import java.util.List;
 import java.util.UUID;
 
 import com.java.edtech.api.conversation.dto.CreateMessageRequest;
-import com.java.edtech.api.conversation.dto.MessagePageResponse;
+import com.java.edtech.api.conversation.dto.MessageCursorResponse;
 import com.java.edtech.api.conversation.dto.MessageResponse;
+import com.java.edtech.common.exception.AppException;
 import com.java.edtech.domain.entity.ConversationSession;
 import com.java.edtech.domain.entity.Message;
 import com.java.edtech.domain.enums.MessageRole;
@@ -13,9 +17,8 @@ import com.java.edtech.repository.MessageRepository;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Sort;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -34,6 +37,7 @@ public class MessageService {
         ConversationSession session = conversationService.getSessionEntity(sessionId);
         Message message = new Message();
         message.setSession(session);
+        message.setRobot(session.getRobot());
         message.setRole(request.getRole());
         message.setContent(request.getContent().trim());
         message.setEmotion(request.getEmotion());
@@ -53,23 +57,38 @@ public class MessageService {
     }
 
     @Transactional(readOnly = true)
-    public MessagePageResponse listMessagesByRobot(UUID robotId, int page, int size) {
-        int safePage = Math.max(0, page);
-        int safeSize = Math.min(100, Math.max(1, size));
-        PageRequest pageable = PageRequest.of(safePage, safeSize, Sort.by(Sort.Direction.ASC, "createdAt"));
-        Page<Message> messages = messageRepository.findByRobotId(robotId, pageable);
-        List<MessageResponse> items = messages.getContent().stream()
+    public MessageCursorResponse listMessagesByRobot(UUID robotId, String cursor, int limit) {
+        CursorKey cursorKey = parseCursor(cursor);
+        int safeLimit = Math.min(100, Math.max(1, limit));
+        PageRequest pageable = PageRequest.of(0, safeLimit + 1);
+
+        List<Message> rows = cursorKey == null
+                ? messageRepository.findFirstPageByRobotId(robotId, pageable)
+                : messageRepository.findNextPageByRobotIdBeforeCursor(
+                        robotId,
+                        cursorKey.createdAt(),
+                        cursorKey.id(),
+                        pageable
+                );
+
+        boolean hasMore = rows.size() > safeLimit;
+        List<Message> currentPage = hasMore ? rows.subList(0, safeLimit) : rows;
+        List<MessageResponse> items = currentPage.stream()
                 .map(this::toResponse)
                 .toList();
-        log.info("SERVICE listMessagesByRobot robotId={} count={} page={}/{}",
-                robotId, items.size(), messages.getNumber(), messages.getTotalPages());
-        return MessagePageResponse.builder()
+
+        String nextCursor = null;
+        if (hasMore && !currentPage.isEmpty()) {
+            Message last = currentPage.get(currentPage.size() - 1);
+            nextCursor = encodeCursor(last.getCreatedAt(), last.getId());
+        }
+
+        log.info("SERVICE listMessagesByRobot robotId={} count={} hasMore={} cursorPresent={}",
+                robotId, items.size(), hasMore, cursor != null && !cursor.isBlank());
+        return MessageCursorResponse.builder()
                 .items(items)
-                .page(messages.getNumber())
-                .size(messages.getSize())
-                .totalElements(messages.getTotalElements())
-                .totalPages(messages.getTotalPages())
-                .hasNext(messages.hasNext())
+                .nextCursor(nextCursor)
+                .hasMore(hasMore)
                 .build();
     }
 
@@ -95,6 +114,7 @@ public class MessageService {
         if (transcript != null && !transcript.isBlank()) {
             Message userMessage = new Message();
             userMessage.setSession(session);
+            userMessage.setRobot(session.getRobot());
             userMessage.setRole(MessageRole.USER);
             userMessage.setContent(transcript.trim());
             messageRepository.save(userMessage);
@@ -103,6 +123,7 @@ public class MessageService {
         if (assistantReply != null && !assistantReply.isBlank()) {
             Message assistantMessage = new Message();
             assistantMessage.setSession(session);
+            assistantMessage.setRobot(session.getRobot());
             assistantMessage.setRole(MessageRole.ASSISTANT);
             assistantMessage.setContent(assistantReply.trim());
             messageRepository.save(assistantMessage);
@@ -130,5 +151,35 @@ public class MessageService {
         } catch (IllegalArgumentException ex) {
             return null;
         }
+    }
+
+    private CursorKey parseCursor(String cursor) {
+        if (cursor == null || cursor.isBlank()) {
+            return null;
+        }
+        try {
+            byte[] decodedBytes = Base64.getUrlDecoder().decode(cursor);
+            String decoded = new String(decodedBytes, StandardCharsets.UTF_8);
+            String[] parts = decoded.split("\\|", 2);
+            if (parts.length != 2) {
+                throw new IllegalArgumentException("Invalid cursor format");
+            }
+            Instant createdAt = Instant.parse(parts[0]);
+            UUID id = UUID.fromString(parts[1]);
+            return new CursorKey(createdAt, id);
+        } catch (IllegalArgumentException ex) {
+            throw new AppException(HttpStatus.BAD_REQUEST, "INVALID_CURSOR", "Invalid cursor");
+        }
+    }
+
+    private String encodeCursor(Instant createdAt, UUID id) {
+        if (createdAt == null || id == null) {
+            return null;
+        }
+        String raw = createdAt + "|" + id;
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(raw.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private record CursorKey(Instant createdAt, UUID id) {
     }
 }

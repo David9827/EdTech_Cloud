@@ -37,6 +37,10 @@ public class Message {
     @JoinColumn(name = "session_id")
     private ConversationSession session;
 
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "robot_id", nullable = false)
+    private Robot robot;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, columnDefinition = "message_role")
     @JdbcTypeCode(SqlTypes.NAMED_ENUM)
