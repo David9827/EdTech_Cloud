@@ -3,6 +3,7 @@
 #include <ArduinoJson.h>
 #include <WebSocketsClient.h>
 #include <SPI.h>
+#include <SPIFFS.h>
 #include <driver/i2s.h>
 #include <string.h>
 #include <freertos/FreeRTOS.h>
@@ -54,23 +55,25 @@ static const char* AUTH_BEARER_TOKEN = "";
 static const uint32_t HTTP_CONNECT_TIMEOUT_MS = 8000;
 static const uint32_t HTTP_READ_TIMEOUT_MS = 15000;
 static const int AUDIO_SAMPLE_RATE = 16000;
+static const int AUDIO_OUTPUT_SAMPLE_RATE = 22050;
 static const uint32_t WIFI_CONNECT_ATTEMPT_MS = 15000;
 static const uint32_t WIFI_RETRY_COOLDOWN_MS = 4000;
 static const uint32_t QA_STEP_TIMEOUT_MS = 12000;
 static const uint32_t QA_WAIT_TTS_END_MS = 25000;
 static const int QA_MIC_CHUNK_BYTES = 640; // 20 ms at 16kHz mono 16-bit PCM
 static const char* QA_AUDIO_FORMAT = "PCM_16BIT";
-static const uint32_t QA_WAIT_SPEECH_TIMEOUT_MS = 7000;
-static const uint32_t QA_FORCE_START_MS = 2500;
+static const int QA_WAV_HEADER_BYTES = 44;
+static const uint32_t QA_WAIT_SPEECH_TIMEOUT_MS = 4500;
+static const uint32_t QA_FORCE_START_MS = 1600;
 static const bool QA_ENABLE_FORCE_START = true;
 static const uint8_t QA_FORCE_START_MIN_HITS = 2;
 static const uint32_t QA_MAX_UTTERANCE_MS = 9000;
 static const uint32_t QA_MIN_UTTERANCE_MS = 500;
 static const uint32_t QA_END_SILENCE_MS = 850;
 static const uint8_t QA_SPEECH_HIT_FRAMES = 3;
-static const uint8_t QA_PREROLL_FRAMES = 8;
-static const int QA_VAD_MIN_ABS = 220;
-static const float QA_VAD_THRESHOLD_MULTIPLIER = 1.45f;
+static const uint8_t QA_PREROLL_FRAMES = 12;
+static const int QA_VAD_MIN_ABS = 235;
+static const float QA_VAD_THRESHOLD_MULTIPLIER = 1.52f;
 static const float QA_VAD_NOISE_EMA_ALPHA = 0.06f;
 static const uint16_t QA_VAD_MIN_ZCR = 6;
 static const uint16_t QA_VAD_MAX_ZCR = 140;
@@ -81,21 +84,28 @@ static const bool AUTO_QA_ENABLED = true;
 static const bool AUTO_QA_LISTEN_IN_IDLE = true;
 static const uint32_t AUTO_QA_COOLDOWN_MS = 1200;
 static const uint8_t AUTO_QA_HIT_FRAMES = 4;
-static const int AUTO_QA_MIN_ABS = 210;
-static const float AUTO_QA_THRESHOLD_MULTIPLIER = 1.4f;
+static const int AUTO_QA_MIN_ABS = 230;
+static const float AUTO_QA_THRESHOLD_MULTIPLIER = 1.50f;
 static const float AUTO_QA_NOISE_EMA_ALPHA = 0.06f;
-static const uint16_t AUTO_QA_MIN_ZCR = 6;
+static const uint16_t AUTO_QA_MIN_ZCR = 7;
 static const uint16_t AUTO_QA_MAX_ZCR = 145;
 static const float AUTO_QA_MAX_PEAK_TO_AVG = 15.0f;
 static const bool AUTO_QA_ALLOW_BARGE_IN_DURING_QA_TTS = true;
 static const uint32_t AUTO_QA_QA_TTS_GUARD_MS = 350;
-static const int AUTO_QA_QA_TTS_MIN_ABS = 220;
-static const float AUTO_QA_QA_TTS_THRESHOLD_MULTIPLIER = 1.5f;
-static const uint8_t AUTO_QA_QA_TTS_HIT_FRAMES = 4;
+static const int AUTO_QA_QA_TTS_MIN_ABS = 260;
+static const float AUTO_QA_QA_TTS_THRESHOLD_MULTIPLIER = 1.75f;
+static const uint8_t AUTO_QA_QA_TTS_HIT_FRAMES = 5;
 static const uint16_t AUDIO_OUT_CHUNK_BYTES = 512;
 static const uint16_t AUDIO_OUT_QUEUE_DEPTH = 96;
 static const uint32_t AUDIO_OUT_ENQUEUE_TIMEOUT_MS = 80;
-static const float AUDIO_OUTPUT_GAIN = 1.8f; // 1.0 = original volume
+static const uint32_t AUDIO_PROMPT_ENQUEUE_TIMEOUT_MS = 150;
+static const uint32_t WIFI_FAIL_PROMPT_COOLDOWN_MS = 15000;
+static const char* AUDIO_PROMPT_CANT_CONNECT_WIFI = "/audio/cant_connect_wifi.wav";
+static const char* AUDIO_PROMPT_NO_SPEECH = "/audio/no_speech.wav";
+static const char* AUDIO_PROMPT_START_SUCCESS = "/audio/start_success.wav";
+static const uint32_t STATS_REFRESH_MS = 800;
+static const uint32_t BOOT_BUTTON_DEBOUNCE_MS = 45;
+static const float AUDIO_OUTPUT_GAIN = 0.9f; // 1.0 = original volume
 static const uint32_t COMMAND_PULL_INTERVAL_MS = 1000;
 static const uint8_t COMMAND_QUEUE_DEPTH = 8;
 
@@ -118,6 +128,8 @@ static const uint8_t COMMAND_QUEUE_DEPTH = 8;
 #define LED_R 47
 #define LED_G 39
 #define LED_B 21
+#define BOOT_BUTTON_PIN 0
+static const bool BOOT_BUTTON_ACTIVE_LOW = true;
 
 // ========================= 2) APP STATE =========================
 enum RobotState {
@@ -226,6 +238,13 @@ volatile bool g_stopRequested = false;
 float g_autoQaNoiseEma = 300.0f;
 uint8_t g_autoQaSpeechHits = 0;
 unsigned long g_lastQaFinishMs = 0;
+bool g_spiffsReady = false;
+unsigned long g_lastWifiFailPromptMs = 0;
+bool g_statsOverlayEnabled = false;
+unsigned long g_statsLastDrawMs = 0;
+bool g_bootButtonRawReleased = true;
+bool g_bootButtonStableReleased = true;
+unsigned long g_bootButtonLastChangeMs = 0;
 
 struct AudioOutChunk {
   uint16_t len = 0;
@@ -274,6 +293,26 @@ void drawRobotEyes(int offsetX, int offsetY, int height, bool isHappy, int browL
 void drawListeningEyes(uint8_t phase);
 void tickEyeAnimation();
 void tickFaceUi();
+void pumpUiAndControlDuringBlockingWork();
+void initSpiffsStorage();
+bool playWavPromptFromSpiffs(const char* path, bool allowAbort);
+void playCantConnectWifiPrompt();
+bool playNoSpeechPrompt();
+void playStartSuccessPrompt();
+bool shouldAbortCurrentOutput();
+void startQaInterrupt(const char* trigger);
+bool sendWsAudioStart();
+bool sendWsAudioEnd();
+void finishQaInterrupt(bool success, const char* reason);
+uint32_t estimateWavPromptDurationMs(const char* path);
+void waitWithWsPump(uint32_t waitMs);
+void restartQaListeningAfterNoSpeech(const char* reasonTag);
+bool isWsNoSpeechError();
+void initBootButtonToggle();
+void tickBootButtonToggle();
+void toggleStatsOverlay();
+void drawStatsOverlay(bool forceDraw);
+bool isBootButtonReleased();
 
 // ========================= 4) HW INIT + UI =========================
 void setStatusLed(bool r, bool g, bool b) {
@@ -402,7 +441,7 @@ void tickEyeAnimation() {
     return;
   }
 
-  if (g_state != STATE_IDLE) {
+  if (g_state == STATE_INTERRUPT_QA) {
     g_eyeAnimActive = false;
     return;
   }
@@ -437,7 +476,16 @@ void tickEyeAnimation() {
 }
 
 void tickFaceUi() {
-  if (!g_tftReady || !g_hasEverWifiConnected) {
+  if (!g_tftReady) {
+    return;
+  }
+
+  if (g_statsOverlayEnabled) {
+    drawStatsOverlay(false);
+    return;
+  }
+
+  if (!g_hasEverWifiConnected) {
     return;
   }
 
@@ -456,7 +504,7 @@ void tickFaceUi() {
 
   g_listeningFaceShown = false;
 
-  if (g_state == STATE_IDLE) {
+  if (g_state == STATE_IDLE || g_state == STATE_STORY_PLAYING) {
     g_neutralFaceShown = false;
     tickEyeAnimation();
     return;
@@ -472,7 +520,7 @@ void tickFaceUi() {
 void initI2S() {
   i2s_config_t txConfig = {};
   txConfig.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX);
-  txConfig.sample_rate = AUDIO_SAMPLE_RATE;
+  txConfig.sample_rate = AUDIO_OUTPUT_SAMPLE_RATE;
   txConfig.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT;
   txConfig.channel_format = I2S_CHANNEL_FMT_ONLY_LEFT;
   txConfig.communication_format = I2S_COMM_FORMAT_STAND_I2S;
@@ -548,8 +596,10 @@ void initHardware() {
   g_tft.setTextColor(ST77XX_WHITE);
   g_tftReady = true;
 
+  initBootButtonToggle();
   initI2S();
   initAudioOutputPipeline();
+  initSpiffsStorage();
 }
 
 // ========================= 5) UTIL HELPERS =========================
@@ -591,6 +641,24 @@ void consumeBody(HTTPClient& http) {
   while (http.connected() && (stream->available() > 0)) {
     stream->read();
   }
+}
+
+void pumpUiAndControlDuringBlockingWork() {
+  tickBootButtonToggle();
+  if (g_wsInitialized) {
+    g_ws.loop();
+  }
+
+  while (Serial.available() > 0) {
+    char c = (char)Serial.read();
+    if (c == 'q' || c == 'Q') {
+      startQaInterrupt("serial");
+    } else if (c == 'b' || c == 'B') {
+      toggleStatsOverlay();
+    }
+  }
+
+  tickFaceUi();
 }
 
 // ========================= 5.1) AUDIO OUTPUT PIPELINE =========================
@@ -697,6 +765,325 @@ bool enqueueAudioBytes(const uint8_t* data, size_t bytesLen, uint32_t waitMs = A
   }
 
   return true;
+}
+
+void initSpiffsStorage() {
+  if (g_spiffsReady) {
+    return;
+  }
+  g_spiffsReady = SPIFFS.begin(true);
+  if (!g_spiffsReady) {
+    Serial.println("[SPIFFS] mount failed");
+    return;
+  }
+
+  Serial.println("[SPIFFS] mounted");
+  Serial.printf("[SPIFFS] prompts: wifi=%d no_speech=%d start=%d\n",
+                SPIFFS.exists(AUDIO_PROMPT_CANT_CONNECT_WIFI) ? 1 : 0,
+                SPIFFS.exists(AUDIO_PROMPT_NO_SPEECH) ? 1 : 0,
+                SPIFFS.exists(AUDIO_PROMPT_START_SUCCESS) ? 1 : 0);
+}
+
+bool playWavPromptFromSpiffs(const char* path, bool allowAbort) {
+  if (!g_spiffsReady || path == nullptr || path[0] == '\0') {
+    return false;
+  }
+  if (g_audioOutQueue == nullptr || !g_i2sTxReady) {
+    return false;
+  }
+
+  File file = SPIFFS.open(path, FILE_READ);
+  if (!file) {
+    Serial.printf("[AUDIO] prompt missing: %s\n", path);
+    return false;
+  }
+
+  uint8_t buf[512];
+  int skipHeader = QA_WAV_HEADER_BYTES;
+  size_t totalQueued = 0;
+  bool enqueueFailed = false;
+
+  while (file.available()) {
+    if (allowAbort && shouldAbortCurrentOutput()) {
+      break;
+    }
+    pumpUiAndControlDuringBlockingWork();
+
+    int n = file.read(buf, sizeof(buf));
+    if (n <= 0) {
+      break;
+    }
+
+    int offset = 0;
+    if (skipHeader > 0) {
+      int drop = n > skipHeader ? skipHeader : n;
+      skipHeader -= drop;
+      offset = drop;
+    }
+
+    int audioBytes = n - offset;
+    if (audioBytes > 0) {
+      if (!enqueueAudioBytes(buf + offset, (size_t)audioBytes, AUDIO_PROMPT_ENQUEUE_TIMEOUT_MS)) {
+        enqueueFailed = true;
+        break;
+      }
+      totalQueued += (size_t)audioBytes;
+    }
+  }
+
+  file.close();
+  if (enqueueFailed) {
+    Serial.printf("[AUDIO] prompt enqueue failed: %s\n", path);
+    return false;
+  }
+  if (allowAbort && shouldAbortCurrentOutput()) {
+    return false;
+  }
+  Serial.printf("[AUDIO] prompt queued: %s bytes=%u\n", path, (unsigned)totalQueued);
+  return totalQueued > 0;
+}
+
+void playCantConnectWifiPrompt() {
+  unsigned long now = millis();
+  if (g_lastWifiFailPromptMs != 0 && (now - g_lastWifiFailPromptMs) < WIFI_FAIL_PROMPT_COOLDOWN_MS) {
+    return;
+  }
+  g_lastWifiFailPromptMs = now;
+  flushAudioOutputNow();
+  playWavPromptFromSpiffs(AUDIO_PROMPT_CANT_CONNECT_WIFI, false);
+}
+
+bool playNoSpeechPrompt() {
+  return playWavPromptFromSpiffs(AUDIO_PROMPT_NO_SPEECH, false);
+}
+
+void playStartSuccessPrompt() {
+  flushAudioOutputNow();
+  playWavPromptFromSpiffs(AUDIO_PROMPT_START_SUCCESS, false);
+}
+
+void initBootButtonToggle() {
+  pinMode(BOOT_BUTTON_PIN, INPUT_PULLUP);
+  bool released = isBootButtonReleased();
+  g_bootButtonRawReleased = released;
+  g_bootButtonStableReleased = released;
+  g_bootButtonLastChangeMs = millis();
+}
+
+void drawStatsOverlay(bool forceDraw) {
+  if (!g_tftReady || !g_statsOverlayEnabled) {
+    return;
+  }
+
+  unsigned long now = millis();
+  if (!forceDraw && g_statsLastDrawMs != 0 && (now - g_statsLastDrawMs) < STATS_REFRESH_MS) {
+    return;
+  }
+  g_statsLastDrawMs = now;
+
+  uint32_t cpuMhz = (uint32_t)ESP.getCpuFreqMHz();
+  uint32_t heapTotalKb = (uint32_t)(ESP.getHeapSize() / 1024U);
+  uint32_t heapFreeKb = (uint32_t)(ESP.getFreeHeap() / 1024U);
+  uint32_t heapUsedKb = heapTotalKb > heapFreeKb ? (heapTotalKb - heapFreeKb) : 0;
+  uint32_t heapPct = heapTotalKb == 0 ? 0 : (heapUsedKb * 100U) / heapTotalKb;
+
+  uint32_t psTotalKb = (uint32_t)(ESP.getPsramSize() / 1024U);
+  uint32_t psFreeKb = (uint32_t)(ESP.getFreePsram() / 1024U);
+  uint32_t psUsedKb = psTotalKb > psFreeKb ? (psTotalKb - psFreeKb) : 0;
+  uint32_t psPct = psTotalKb == 0 ? 0 : (psUsedKb * 100U) / psTotalKb;
+
+  uint32_t diskTotalKb = 0;
+  uint32_t diskUsedKb = 0;
+  uint32_t diskPct = 0;
+  if (g_spiffsReady) {
+    diskTotalKb = (uint32_t)(SPIFFS.totalBytes() / 1024U);
+    diskUsedKb = (uint32_t)(SPIFFS.usedBytes() / 1024U);
+    diskPct = diskTotalKb == 0 ? 0 : (diskUsedKb * 100U) / diskTotalKb;
+  }
+
+  uint32_t uptimeSec = now / 1000U;
+  uint32_t hh = uptimeSec / 3600U;
+  uint32_t mm = (uptimeSec % 3600U) / 60U;
+  uint32_t ss = uptimeSec % 60U;
+
+  g_tft.fillScreen(ST77XX_BLACK);
+  g_tft.setTextSize(2);
+  g_tft.setTextColor(ST77XX_GREEN);
+  g_tft.setCursor(0, 0);
+
+  char line[64];
+  snprintf(line, sizeof(line), "STATS (BOOT: toggle)");
+  g_tft.println(line);
+
+  snprintf(line, sizeof(line), "CPU: %lu MHz", (unsigned long)cpuMhz);
+  g_tft.println(line);
+
+  snprintf(line, sizeof(line), "RAM: %lu/%lu KB (%lu%%)",
+           (unsigned long)heapUsedKb,
+           (unsigned long)heapTotalKb,
+           (unsigned long)heapPct);
+  g_tft.println(line);
+
+  if (psTotalKb > 0) {
+    snprintf(line, sizeof(line), "PSRAM: %lu/%lu KB (%lu%%)",
+             (unsigned long)psUsedKb,
+             (unsigned long)psTotalKb,
+             (unsigned long)psPct);
+  } else {
+    snprintf(line, sizeof(line), "PSRAM: N/A");
+  }
+  g_tft.println(line);
+
+  if (g_spiffsReady) {
+    snprintf(line, sizeof(line), "DISK: %lu/%lu KB (%lu%%)",
+             (unsigned long)diskUsedKb,
+             (unsigned long)diskTotalKb,
+             (unsigned long)diskPct);
+  } else {
+    snprintf(line, sizeof(line), "DISK: SPIFFS not mounted");
+  }
+  g_tft.println(line);
+
+  snprintf(line, sizeof(line), "UP: %02lu:%02lu:%02lu",
+           (unsigned long)hh,
+           (unsigned long)mm,
+           (unsigned long)ss);
+  g_tft.println(line);
+
+  snprintf(line, sizeof(line), "STATE=%d QA=%d WiFi=%s",
+           (int)g_state,
+           (int)g_qaStep,
+           WiFi.status() == WL_CONNECTED ? "OK" : "DOWN");
+  g_tft.println(line);
+  g_tft.setTextSize(2);
+}
+
+void toggleStatsOverlay() {
+  g_statsOverlayEnabled = !g_statsOverlayEnabled;
+  g_statsLastDrawMs = 0;
+
+  if (g_statsOverlayEnabled) {
+    g_eyeAnimActive = false;
+    g_neutralFaceShown = false;
+    g_listeningFaceShown = false;
+    drawStatsOverlay(true);
+    Serial.println("[UI] Stats overlay ON");
+    return;
+  }
+
+  if (g_tftReady) {
+    g_tft.fillScreen(EYE_BG_COLOR);
+  }
+  g_eyeAnimActive = false;
+  g_neutralFaceShown = false;
+  g_listeningFaceShown = false;
+  Serial.println("[UI] Stats overlay OFF");
+}
+
+void tickBootButtonToggle() {
+  bool rawReleased = isBootButtonReleased();
+  unsigned long now = millis();
+
+  if (rawReleased != g_bootButtonRawReleased) {
+    g_bootButtonRawReleased = rawReleased;
+    g_bootButtonLastChangeMs = now;
+  }
+
+  if ((now - g_bootButtonLastChangeMs) < BOOT_BUTTON_DEBOUNCE_MS) {
+    return;
+  }
+
+  if (g_bootButtonStableReleased != g_bootButtonRawReleased) {
+    bool wasReleased = g_bootButtonStableReleased;
+    g_bootButtonStableReleased = g_bootButtonRawReleased;
+    if (!wasReleased && g_bootButtonStableReleased) {
+      toggleStatsOverlay();
+    }
+  }
+}
+
+bool isBootButtonReleased() {
+  int level = digitalRead(BOOT_BUTTON_PIN);
+  if (BOOT_BUTTON_ACTIVE_LOW) {
+    return level == HIGH;
+  }
+  return level == LOW;
+}
+
+uint32_t estimateWavPromptDurationMs(const char* path) {
+  if (!g_spiffsReady || path == nullptr || path[0] == '\0') {
+    return 0;
+  }
+
+  File file = SPIFFS.open(path, FILE_READ);
+  if (!file) {
+    return 0;
+  }
+
+  size_t bytes = file.size();
+  file.close();
+  if (bytes <= (size_t)QA_WAV_HEADER_BYTES) {
+    return 0;
+  }
+
+  size_t pcmBytes = bytes - (size_t)QA_WAV_HEADER_BYTES;
+  uint32_t bytesPerSec = (uint32_t)AUDIO_SAMPLE_RATE * 2U; // mono 16-bit PCM
+  if (bytesPerSec == 0) {
+    return 0;
+  }
+  return (uint32_t)(((uint64_t)pcmBytes * 1000ULL) / bytesPerSec);
+}
+
+void waitWithWsPump(uint32_t waitMs) {
+  unsigned long start = millis();
+  while ((millis() - start) < waitMs) {
+    pumpUiAndControlDuringBlockingWork();
+    delay(10);
+  }
+}
+
+void restartQaListeningAfterNoSpeech(const char* reasonTag) {
+  sendWsAudioEnd();
+  flushAudioOutputNow();
+
+  bool promptPlayed = playNoSpeechPrompt();
+  uint32_t promptMs = promptPlayed ? estimateWavPromptDurationMs(AUDIO_PROMPT_NO_SPEECH) : 0;
+  if (promptMs < 250) {
+    promptMs = 250;
+  }
+  waitWithWsPump(promptMs + 120);
+
+  if (g_stopRequested) {
+    finishQaInterrupt(false, "qa_stop_requested");
+    return;
+  }
+
+  const char* finishReason = reasonTag == nullptr ? "qa_no_speech_prompted" : reasonTag;
+  Serial.printf("[QA] Prompted no-speech then finish: %s\n", finishReason);
+  finishQaInterrupt(true, finishReason);
+}
+
+bool isWsNoSpeechError() {
+  String code = g_wsErrorCode;
+  String message = g_wsErrorMessage;
+  code.toLowerCase();
+  message.toLowerCase();
+
+  if (code == "no_audio") {
+    return true;
+  }
+  if (code == "pipeline_error") {
+    if (message.indexOf("empty transcript") >= 0) {
+      return true;
+    }
+    if (message.indexOf("no speech") >= 0) {
+      return true;
+    }
+    if (message.indexOf("blank audio") >= 0) {
+      return true;
+    }
+  }
+  return false;
 }
 
 void copyStringToBuf(char* dst, size_t dstSize, const String& src) {
@@ -836,6 +1223,7 @@ bool ensureWifiConnected() {
       Serial.printf("[WIFI] Connected. IP=%s\n", WiFi.localIP().toString().c_str());
       setStatusColor(ST77XX_GREEN);
       onFirstWifiConnected();
+      playStartSuccessPrompt();
     }
     return true;
   }
@@ -873,6 +1261,7 @@ bool ensureWifiConnected() {
     Serial.printf("[WIFI] Connected. IP=%s\n", WiFi.localIP().toString().c_str());
     setStatusColor(ST77XX_GREEN);
     onFirstWifiConnected();
+    playStartSuccessPrompt();
     return true;
   }
 
@@ -881,6 +1270,7 @@ bool ensureWifiConnected() {
     printWifiScanHint();
   }
   showWifiStatusOnTft(String("WiFi retry\n") + wifiStatusText(after), ST77XX_RED);
+  playCantConnectWifiPrompt();
   return false;
 }
 
@@ -1259,7 +1649,7 @@ void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
     int channels = doc["channels"].isNull() ? 1 : doc["channels"].as<int>();
 
     if (mimeType.startsWith("audio/wav")) {
-      g_wsSkipAudioHeaderBytes = 44;
+      g_wsSkipAudioHeaderBytes = QA_WAV_HEADER_BYTES;
     } else {
       g_wsSkipAudioHeaderBytes = 0;
     }
@@ -1587,6 +1977,7 @@ bool playAudioChunk(WiFiClient& stream, int length, const String& mimeType, int 
     if (shouldAbortCurrentOutput()) {
       break;
     }
+    pumpUiAndControlDuringBlockingWork();
 
     // Allow auto VAD trigger while receiving long story audio chunk.
     tickAutoQaTrigger();
@@ -1660,6 +2051,7 @@ PlaybackResponse parseAndPlayAudioResponse(HTTPClient& http, int code) {
         break;
       }
 
+      pumpUiAndControlDuringBlockingWork();
       tickAutoQaTrigger();
       int available = stream->available();
       if (available > 0) {
@@ -1890,6 +2282,10 @@ void tickInterruptQa() {
   const unsigned long now = millis();
 
   if (g_wsError) {
+    if (isWsNoSpeechError()) {
+      restartQaListeningAfterNoSpeech("qa_ws_no_speech");
+      return;
+    }
     finishQaInterrupt(false, "qa_ws_error");
     return;
   }
@@ -1939,6 +2335,11 @@ void tickInterruptQa() {
       size_t readBytes = 0;
       esp_err_t err = i2s_read(I2S_NUM_1, micBuf, QA_MIC_CHUNK_BYTES, &readBytes, 20 / portTICK_PERIOD_MS);
       if (err != ESP_OK || readBytes == 0) {
+        unsigned long waitMs = now - g_qaRecordStartMs;
+        if (waitMs > QA_WAIT_SPEECH_TIMEOUT_MS) {
+          restartQaListeningAfterNoSpeech("qa_no_audio");
+          return;
+        }
         if (now - g_qaRecordStartMs > QA_MAX_UTTERANCE_MS) {
           finishQaInterrupt(false, "qa_mic_timeout");
         }
@@ -1993,8 +2394,8 @@ void tickInterruptQa() {
                         forceStart ? "force" : "vad");
           showTextOnTft("QA recording...", ST77XX_BLUE);
         } else if (waitMs > QA_WAIT_SPEECH_TIMEOUT_MS) {
-          sendWsAudioEnd();
-          finishQaInterrupt(false, "qa_no_speech");
+          restartQaListeningAfterNoSpeech("qa_no_speech");
+          return;
         }
         break;
       }
@@ -2056,7 +2457,12 @@ void setup() {
 }
 
 void loop() {
+  tickBootButtonToggle();
+
   if (!ensureWifiConnected()) {
+    if (g_statsOverlayEnabled) {
+      drawStatsOverlay(false);
+    }
     delay(50);
     return;
   }
@@ -2072,6 +2478,8 @@ void loop() {
     char c = (char)Serial.read();
     if (c == 'q' || c == 'Q') {
       startQaInterrupt("serial");
+    } else if (c == 'b' || c == 'B') {
+      toggleStatsOverlay();
     }
   }
 
