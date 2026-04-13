@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.java.edtech.api.robot.dto.IssueStoryCommandRequest;
 import com.java.edtech.api.robot.dto.RobotStoryCommandResponse;
 import com.java.edtech.common.exception.AppException;
+import com.java.edtech.common.exception.ErrorCode;
 import com.java.edtech.domain.entity.Robot;
 import com.java.edtech.domain.entity.Story;
 import com.java.edtech.domain.enums.RobotCommandType;
@@ -33,7 +34,7 @@ public class RobotStoryCommandService {
 
     public RobotStoryCommandResponse issueCommand(UUID robotId, IssueStoryCommandRequest request) {
         Robot robot = robotRepository.findById(robotId)
-                .orElseThrow(() -> new AppException(HttpStatus.NOT_FOUND, "ROBOT_NOT_FOUND", "Robot not found"));
+                .orElseThrow(() -> new AppException(ErrorCode.ROBOT_NOT_FOUND));
 
         RobotCommandType commandType = resolveCommandType(request);
         UUID storyId = validateAndResolveStoryId(commandType, request.getStoryId());
@@ -58,7 +59,7 @@ public class RobotStoryCommandService {
 
     public RobotStoryCommandResponse pollCommand(UUID robotId, boolean consume) {
         robotRepository.findById(robotId)
-                .orElseThrow(() -> new AppException(HttpStatus.NOT_FOUND, "ROBOT_NOT_FOUND", "Robot not found"));
+                .orElseThrow(() -> new AppException(ErrorCode.ROBOT_NOT_FOUND));
 
         RobotStoryCommand command = readNextValidCommand(robotId, consume);
         if (command == null) {
@@ -72,7 +73,7 @@ public class RobotStoryCommandService {
             return request.getType();
         }
         if (request.getAction() == null) {
-            throw new AppException(HttpStatus.BAD_REQUEST, "COMMAND_TYPE_REQUIRED", "type or action is required");
+            throw new AppException(ErrorCode.COMMAND_TYPE_REQUIRED);
         }
         return switch (request.getAction()) {
             case START -> RobotCommandType.START_STORY;
@@ -85,17 +86,17 @@ public class RobotStoryCommandService {
             return storyId;
         }
         if (storyId == null) {
-            throw new AppException(HttpStatus.BAD_REQUEST, "STORY_ID_REQUIRED", "storyId is required for START_STORY command");
+            throw new AppException(ErrorCode.STORY_ID_REQUIRED);
         }
         Story story = storyRepository.findByIdAndStatus(storyId, StoryStatus.PUBLISHED)
-                .orElseThrow(() -> new AppException(HttpStatus.NOT_FOUND, "STORY_NOT_FOUND", "Published story not found"));
+                .orElseThrow(() -> new AppException(ErrorCode.STORY_NOT_FOUND));
         return story.getId();
     }
 
     private UUID validateAndResolveReminderId(RobotCommandType commandType, UUID reminderId) {
         if ((commandType == RobotCommandType.REMINDER_CREATE || commandType == RobotCommandType.REMINDER_CANCEL)
                 && reminderId == null) {
-            throw new AppException(HttpStatus.BAD_REQUEST, "REMINDER_ID_REQUIRED", "reminderId is required for reminder command");
+            throw new AppException(ErrorCode.REMINDER_ID_REQUIRED);
         }
         return reminderId;
     }
@@ -114,7 +115,7 @@ public class RobotStoryCommandService {
             stringRedisTemplate.opsForList().leftPush(commandStackKey(robotId), payload);
             stringRedisTemplate.expire(commandStackKey(robotId), COMMAND_TTL.multipliedBy(2));
         } catch (Exception ex) {
-            throw new AppException(HttpStatus.INTERNAL_SERVER_ERROR, "REDIS_WRITE_ERROR", "Unable to save story command");
+            throw new AppException(ErrorCode.REDIS_WRITE_ERROR);
         }
     }
 
@@ -136,7 +137,7 @@ public class RobotStoryCommandService {
                 }
             }
         } catch (Exception ex) {
-            throw new AppException(HttpStatus.INTERNAL_SERVER_ERROR, "REDIS_READ_ERROR", "Unable to read story command");
+            throw new AppException(ErrorCode.REDIS_READ_ERROR);
         }
     }
 

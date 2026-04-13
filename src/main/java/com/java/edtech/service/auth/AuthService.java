@@ -13,6 +13,7 @@ import com.java.edtech.api.auth.dto.RegisterRequest;
 import com.java.edtech.api.auth.dto.RefreshRequest;
 import com.java.edtech.api.auth.dto.TokenResponse;
 import com.java.edtech.common.exception.AppException;
+import com.java.edtech.common.exception.ErrorCode;
 import com.java.edtech.common.util.JwtProvider;
 import com.java.edtech.domain.entity.AppUser;
 import com.java.edtech.domain.entity.RefreshToken;
@@ -35,12 +36,12 @@ public class AuthService {
     public TokenResponse login(LoginRequest request) {
         String identifier = request.getEmail();
         AppUser user = appUserRepository.findByEmailIgnoreCaseOrPhone(identifier, identifier)
-                .orElseThrow(() -> new AppException(HttpStatus.UNAUTHORIZED, "INVALID_CREDENTIALS", "Invalid credentials"));
+                .orElseThrow(() -> new AppException(ErrorCode.INVALID_CREDENTIALS));
         if (!user.isActive()) {
-            throw new AppException(HttpStatus.FORBIDDEN, "USER_INACTIVE", "User is inactive");
+            throw new AppException(ErrorCode.USER_INACTIVE);
         }
         if (!passwordEncoder.matches(request.getPassword(), user.getPasswordHash())) {
-            throw new AppException(HttpStatus.UNAUTHORIZED, "INVALID_CREDENTIALS", "Invalid credentials");
+            throw new AppException(ErrorCode.INVALID_CREDENTIALS);
         }
 
         String accessToken = jwtProvider.generateAccessToken(user);
@@ -57,10 +58,10 @@ public class AuthService {
 
     public TokenResponse register(RegisterRequest request) {
         appUserRepository.findByEmail(request.getEmail()).ifPresent(u -> {
-            throw new AppException(HttpStatus.CONFLICT, "EMAIL_EXISTS", "Email already exists");
+            throw new AppException(ErrorCode.EMAIL_EXISTS);
         });
         appUserRepository.findByEmailIgnoreCaseOrPhone(request.getPhone(), request.getPhone()).ifPresent(u -> {
-            throw new AppException(HttpStatus.CONFLICT, "PHONE_EXISTS", "Phone already exists");
+            throw new AppException(ErrorCode.PHONE_EXISTS);
         });
 
         AppUser user = new AppUser();
@@ -84,12 +85,12 @@ public class AuthService {
 
     public TokenResponse refresh(RefreshRequest request) {
         RefreshToken refreshToken = refreshTokenRepository.findByToken(request.getRefreshToken())
-                .orElseThrow(() -> new AppException(HttpStatus.UNAUTHORIZED, "INVALID_REFRESH_TOKEN", "Invalid refresh token"));
+                .orElseThrow(() -> new AppException(ErrorCode.INVALID_REFRESH_TOKEN));
         if (refreshToken.isRevoked()) {
-            throw new AppException(HttpStatus.UNAUTHORIZED, "REFRESH_TOKEN_REVOKED", "Refresh token revoked");
+            throw new AppException(ErrorCode.REFRESH_TOKEN_REVOKED);
         }
         if (refreshToken.getExpiryDate().isBefore(Instant.now())) {
-            throw new AppException(HttpStatus.UNAUTHORIZED, "REFRESH_TOKEN_EXPIRED", "Refresh token expired");
+            throw new AppException(ErrorCode.REFRESH_TOKEN_EXPIRED);
         }
         AppUser user = refreshToken.getUser();
         String accessToken = jwtProvider.generateAccessToken(user);
@@ -131,13 +132,13 @@ public class AuthService {
     private UUID getCurrentUserId() {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         if (authentication == null || authentication.getPrincipal() == null) {
-            throw new AppException(HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", "Unauthorized");
+            throw new AppException(ErrorCode.UNAUTHORIZED);
         }
 
         try {
             return UUID.fromString(authentication.getPrincipal().toString());
         } catch (IllegalArgumentException ex) {
-            throw new AppException(HttpStatus.UNAUTHORIZED, "INVALID_TOKEN", "Invalid token");
+            throw new AppException(ErrorCode.INVALID_TOKEN);
         }
     }
 }

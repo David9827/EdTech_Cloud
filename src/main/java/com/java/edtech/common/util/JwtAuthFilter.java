@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 
 import com.java.edtech.common.config.JwtProperties;
+import com.java.edtech.common.exception.ErrorCode;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
@@ -24,6 +25,8 @@ import java.util.List;
 @Component
 @RequiredArgsConstructor
 public class JwtAuthFilter extends OncePerRequestFilter {
+    public static final String AUTH_ERROR_CODE_ATTR = "AUTH_ERROR_CODE";
+
     private final JwtProperties jwtProperties;
 
     @Override
@@ -31,7 +34,12 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                                     HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
         String header = request.getHeader("Authorization");
-        if (!StringUtils.hasText(header) || !header.startsWith("Bearer ")) {
+        if (!StringUtils.hasText(header)) {
+            filterChain.doFilter(request, response);
+            return;
+        }
+        if (!header.startsWith("Bearer ")) {
+            request.setAttribute(AUTH_ERROR_CODE_ATTR, ErrorCode.INVALID_TOKEN.getCode());
             filterChain.doFilter(request, response);
             return;
         }
@@ -55,6 +63,7 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             SecurityContextHolder.getContext().setAuthentication(authentication);
         } catch (Exception ignored) {
             SecurityContextHolder.clearContext();
+            request.setAttribute(AUTH_ERROR_CODE_ATTR, ErrorCode.INVALID_TOKEN.getCode());
         }
 
         filterChain.doFilter(request, response);

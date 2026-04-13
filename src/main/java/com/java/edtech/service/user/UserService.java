@@ -7,6 +7,7 @@ import com.java.edtech.api.user.dto.DeleteAccountRequest;
 import com.java.edtech.api.user.dto.UpdateAvatarRequest;
 import com.java.edtech.api.user.dto.UserProfileResponse;
 import com.java.edtech.common.exception.AppException;
+import com.java.edtech.common.exception.ErrorCode;
 import com.java.edtech.domain.entity.AppUser;
 import com.java.edtech.repository.AppUserRepository;
 import com.java.edtech.repository.RefreshTokenRepository;
@@ -29,12 +30,12 @@ public class UserService {
     @Transactional
     public void changePassword(ChangePasswordRequest request) {
         if (!request.getNewPassword().equals(request.getConfirmPassword())) {
-            throw new AppException(HttpStatus.BAD_REQUEST, "PASSWORD_MISMATCH", "New password and confirm password do not match");
+            throw new AppException(ErrorCode.PASSWORD_MISMATCH);
         }
 
         AppUser user = getCurrentUserOrThrow();
         if (!passwordEncoder.matches(request.getCurrentPassword(), user.getPasswordHash())) {
-            throw new AppException(HttpStatus.UNAUTHORIZED, "INVALID_CREDENTIALS", "Invalid credentials");
+            throw new AppException(ErrorCode.INVALID_CREDENTIALS);
         }
 
         user.setPasswordHash(passwordEncoder.encode(request.getNewPassword()));
@@ -46,7 +47,7 @@ public class UserService {
     public void deleteAccount(DeleteAccountRequest request) {
         AppUser user = getCurrentUserOrThrow();
         if (!passwordEncoder.matches(request.getPassword(), user.getPasswordHash())) {
-            throw new AppException(HttpStatus.UNAUTHORIZED, "INVALID_CREDENTIALS", "Invalid credentials");
+            throw new AppException(ErrorCode.INVALID_CREDENTIALS);
         }
 
         user.setActive(false);
@@ -81,9 +82,9 @@ public class UserService {
     private AppUser getCurrentUserOrThrow() {
         UUID userId = getCurrentUserId();
         AppUser user = appUserRepository.findById(userId)
-                .orElseThrow(() -> new AppException(HttpStatus.NOT_FOUND, "USER_NOT_FOUND", "User not found"));
+                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
         if (!user.isActive()) {
-            throw new AppException(HttpStatus.FORBIDDEN, "USER_INACTIVE", "User is inactive");
+            throw new AppException(ErrorCode.USER_INACTIVE);
         }
         return user;
     }
@@ -91,13 +92,13 @@ public class UserService {
     private UUID getCurrentUserId() {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         if (authentication == null || authentication.getPrincipal() == null) {
-            throw new AppException(HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", "Unauthorized");
+            throw new AppException(ErrorCode.UNAUTHORIZED);
         }
 
         try {
             return UUID.fromString(authentication.getPrincipal().toString());
         } catch (IllegalArgumentException ex) {
-            throw new AppException(HttpStatus.UNAUTHORIZED, "INVALID_TOKEN", "Invalid token");
+            throw new AppException(ErrorCode.INVALID_TOKEN);
         }
     }
 }

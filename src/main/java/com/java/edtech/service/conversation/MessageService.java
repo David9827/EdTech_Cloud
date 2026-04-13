@@ -10,6 +10,7 @@ import com.java.edtech.api.conversation.dto.CreateMessageRequest;
 import com.java.edtech.api.conversation.dto.MessageCursorResponse;
 import com.java.edtech.api.conversation.dto.MessageResponse;
 import com.java.edtech.common.exception.AppException;
+import com.java.edtech.common.exception.ErrorCode;
 import com.java.edtech.domain.entity.ConversationSession;
 import com.java.edtech.domain.entity.Message;
 import com.java.edtech.domain.enums.MessageRole;
@@ -168,7 +169,7 @@ public class MessageService {
             UUID id = UUID.fromString(parts[1]);
             return new CursorKey(createdAt, id);
         } catch (IllegalArgumentException ex) {
-            throw new AppException(HttpStatus.BAD_REQUEST, "INVALID_CURSOR", "Invalid cursor");
+            throw new AppException(ErrorCode.INVALID_CURSOR);
         }
     }
 

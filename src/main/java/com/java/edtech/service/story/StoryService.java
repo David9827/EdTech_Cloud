@@ -24,6 +24,7 @@ import com.java.edtech.api.story.dto.StorySummaryResponse;
 import com.java.edtech.api.story.dto.StoryDraftDetailResponse;
 import com.java.edtech.api.story.dto.UpdateDraftStoryRequest;
 import com.java.edtech.common.exception.AppException;
+import com.java.edtech.common.exception.ErrorCode;
 import com.java.edtech.domain.entity.Robot;
 import com.java.edtech.domain.entity.Story;
 import com.java.edtech.domain.entity.StoryPlaybackStateEntity;
@@ -87,7 +88,7 @@ public class StoryService {
         int maxChars = normalizeMaxSegmentChars(request.getMaxSegmentChars());
         List<String> parts = splitStoryContent(request.getContent(), maxChars);
         if (parts.isEmpty()) {
-            throw new AppException(HttpStatus.BAD_REQUEST, "STORY_CONTENT_EMPTY", "Story content is empty after normalization");
+            throw new AppException(ErrorCode.STORY_CONTENT_EMPTY);
         }
 
         List<StorySegmentResponse> segmentResponses = new ArrayList<>();
@@ -134,7 +135,7 @@ public class StoryService {
     @Transactional(readOnly = true)
     public StoryDraftDetailResponse getDraftWithContent(UUID storyId) {
         Story story = storyRepository.findByIdAndStatus(storyId, StoryStatus.DRAFT)
-                .orElseThrow(() -> new AppException(HttpStatus.NOT_FOUND, "DRAFT_NOT_FOUND", "Draft story not found"));
+                .orElseThrow(() -> new AppException(ErrorCode.DRAFT_NOT_FOUND));
         List<StorySegmentResponse> segments = storySegmentRepository.findByStoryIdOrderBySegmentOrderAsc(storyId).stream()
                 .map(segment -> StorySegmentResponse.builder()
                         .id(segment.getId())
@@ -160,12 +161,12 @@ public class StoryService {
     @Transactional
     public StoryDraftDetailResponse updateDraft(UUID storyId, UpdateDraftStoryRequest request) {
         Story story = storyRepository.findByIdAndStatus(storyId, StoryStatus.DRAFT)
-                .orElseThrow(() -> new AppException(HttpStatus.NOT_FOUND, "DRAFT_NOT_FOUND", "Draft story not found"));
+                .orElseThrow(() -> new AppException(ErrorCode.DRAFT_NOT_FOUND));
 
         if (request.getTitle() != null) {
             String title = request.getTitle().trim();
             if (title.isEmpty()) {
-                throw new AppException(HttpStatus.BAD_REQUEST, "TITLE_REQUIRED", "title is required");
+                throw new AppException(ErrorCode.TITLE_REQUIRED);
             }
             story.setTitle(title);
         }
@@ -190,12 +191,12 @@ public class StoryService {
         if (contentUpdated) {
             String content = request.getContent().trim();
             if (content.isEmpty()) {
-                throw new AppException(HttpStatus.BAD_REQUEST, "CONTENT_REQUIRED", "content is required");
+                throw new AppException(ErrorCode.CONTENT_REQUIRED);
             }
             int maxChars = normalizeMaxSegmentChars(request.getMaxSegmentChars());
             List<String> parts = splitStoryContent(content, maxChars);
             if (parts.isEmpty()) {
-                throw new AppException(HttpStatus.BAD_REQUEST, "STORY_CONTENT_EMPTY", "Story content is empty after normalization");
+                throw new AppException(ErrorCode.STORY_CONTENT_EMPTY);
             }
 
             storySegmentRepository.deleteByStoryId(storyId);
@@ -253,9 +254,9 @@ public class StoryService {
     @Transactional
     public StoryPlaybackAudioChunk startPlayback(UUID robotId, UUID storyId) {
         Robot robot = robotRepository.findById(robotId)
-                .orElseThrow(() -> new AppException(HttpStatus.NOT_FOUND, "ROBOT_NOT_FOUND", "Robot not found"));
+                .orElseThrow(() -> new AppException(ErrorCode.ROBOT_NOT_FOUND));
         Story story = storyRepository.findByIdAndStatus(storyId, StoryStatus.PUBLISHED)
-                .orElseThrow(() -> new AppException(HttpStatus.NOT_FOUND, "STORY_NOT_FOUND", "Published story not found"));
+                .orElseThrow(() -> new AppException(ErrorCode.STORY_NOT_FOUND));
 
         List<StorySegmentSnapshot> segments = getStorySegments(storyId);
         StorySegmentSnapshot first = segments.get(0);
@@ -276,11 +277,11 @@ public class StoryService {
     public StoryPlaybackAudioChunk nextPlayback(UUID robotId) {
         StoryPlaybackState state = resolvePlaybackState(robotId);
         if (state == null) {
-            throw new AppException(HttpStatus.BAD_REQUEST, "PLAYBACK_NOT_STARTED", "Story playback is not started");
+            throw new AppException(ErrorCode.PLAYBACK_NOT_STARTED);
         }
 
         Story story = storyRepository.findById(state.storyId())
-                .orElseThrow(() -> new AppException(HttpStatus.NOT_FOUND, "STORY_NOT_FOUND", "Story not found"));
+                .orElseThrow(() -> new AppException(ErrorCode.STORY_NOT_FOUND));
 
         List<StorySegmentSnapshot> segments = getStorySegments(state.storyId());
         StorySegmentSnapshot next = findNextSegment(segments, state.currentSegmentOrder());
@@ -443,7 +444,7 @@ public class StoryService {
 
         List<StorySegment> segments = storySegmentRepository.findByStoryIdOrderBySegmentOrderAsc(storyId);
         if (segments.isEmpty()) {
-            throw new AppException(HttpStatus.BAD_REQUEST, "STORY_EMPTY", "Story has no segments");
+            throw new AppException(ErrorCode.STORY_EMPTY);
         }
 
         List<StorySegmentSnapshot> loaded = segments.stream()

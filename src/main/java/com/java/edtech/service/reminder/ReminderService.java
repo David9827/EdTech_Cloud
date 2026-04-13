@@ -9,6 +9,7 @@ import com.java.edtech.api.reminder.dto.ReminderExecuteDataResponse;
 import com.java.edtech.api.reminder.dto.ReminderPageResponse;
 import com.java.edtech.api.reminder.dto.ReminderResponse;
 import com.java.edtech.common.exception.AppException;
+import com.java.edtech.common.exception.ErrorCode;
 import com.java.edtech.domain.entity.AppUser;
 import com.java.edtech.domain.entity.Child;
 import com.java.edtech.domain.entity.Reminder;
@@ -39,18 +40,18 @@ public class ReminderService {
     @Transactional
     public ReminderResponse createReminder(CreateReminderRequest request) {
         AppUser user = appUserRepository.findById(request.getUserId())
-                .orElseThrow(() -> new AppException(HttpStatus.NOT_FOUND, "USER_NOT_FOUND", "User not found"));
+                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
 
         Child child = null;
         if (request.getChildId() != null) {
             child = childRepository.findById(request.getChildId())
-                    .orElseThrow(() -> new AppException(HttpStatus.NOT_FOUND, "CHILD_NOT_FOUND", "Child not found"));
+                    .orElseThrow(() -> new AppException(ErrorCode.CHILD_NOT_FOUND));
         }
 
         Robot robot = null;
         if (request.getRobotId() != null) {
             robot = robotRepository.findById(request.getRobotId())
-                    .orElseThrow(() -> new AppException(HttpStatus.NOT_FOUND, "ROBOT_NOT_FOUND", "Robot not found"));
+                    .orElseThrow(() -> new AppException(ErrorCode.ROBOT_NOT_FOUND));
         }
 
         Reminder reminder = new Reminder();
@@ -61,7 +62,7 @@ public class ReminderService {
         reminder.setTitle(request.getTitle().trim());
         reminder.setMessage(request.getMessage());
         if (!request.getScheduleAt().isAfter(java.time.LocalDateTime.now(REMINDER_LOCAL_ZONE))) {
-            throw new AppException(HttpStatus.BAD_REQUEST, "SCHEDULE_AT_INVALID", "scheduleAt must be in the future (Asia/Bangkok)");
+            throw new AppException(ErrorCode.SCHEDULE_AT_INVALID);
         }
         reminder.setScheduleAt(request.getScheduleAt());
         reminder.setStatus(ReminderStatus.ACTIVE);
@@ -73,17 +74,17 @@ public class ReminderService {
     @Transactional(readOnly = true)
     public ReminderResponse getReminder(UUID reminderId) {
         Reminder reminder = reminderRepository.findById(reminderId)
-                .orElseThrow(() -> new AppException(HttpStatus.NOT_FOUND, "REMINDER_NOT_FOUND", "Reminder not found"));
+                .orElseThrow(() -> new AppException(ErrorCode.REMINDER_NOT_FOUND));
         return toResponse(reminder);
     }
 
     @Transactional(readOnly = true)
     public ReminderExecuteDataResponse getExecuteData(UUID reminderId) {
         Reminder reminder = reminderRepository.findById(reminderId)
-                .orElseThrow(() -> new AppException(HttpStatus.NOT_FOUND, "REMINDER_NOT_FOUND", "Reminder not found"));
+                .orElseThrow(() -> new AppException(ErrorCode.REMINDER_NOT_FOUND));
 
         if (reminder.getStatus() == ReminderStatus.CANCELLED) {
-            throw new AppException(HttpStatus.GONE, "REMINDER_CANCELLED", "Reminder has been cancelled");
+            throw new AppException(ErrorCode.REMINDER_CANCELLED);
         }
 
         return ReminderExecuteDataResponse.builder()
@@ -99,10 +100,10 @@ public class ReminderService {
     @Transactional
     public ReminderResponse cancelReminder(UUID reminderId) {
         Reminder reminder = reminderRepository.findById(reminderId)
-                .orElseThrow(() -> new AppException(HttpStatus.NOT_FOUND, "REMINDER_NOT_FOUND", "Reminder not found"));
+                .orElseThrow(() -> new AppException(ErrorCode.REMINDER_NOT_FOUND));
 
         if (reminder.getStatus() == ReminderStatus.DONE) {
-            throw new AppException(HttpStatus.BAD_REQUEST, "REMINDER_ALREADY_DONE", "Reminder already completed");
+            throw new AppException(ErrorCode.REMINDER_ALREADY_DONE);
         }
 
         if (reminder.getStatus() != ReminderStatus.CANCELLED) {

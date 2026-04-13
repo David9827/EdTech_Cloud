@@ -7,6 +7,7 @@ import com.java.edtech.api.conversation.dto.ConversationSessionPageResponse;
 import com.java.edtech.api.conversation.dto.ConversationSessionResponse;
 import com.java.edtech.api.conversation.dto.CreateConversationSessionRequest;
 import com.java.edtech.common.exception.AppException;
+import com.java.edtech.common.exception.ErrorCode;
 import com.java.edtech.domain.entity.Child;
 import com.java.edtech.domain.entity.ConversationSession;
 import com.java.edtech.domain.entity.Robot;
@@ -40,7 +41,7 @@ public class ConversationService {
         log.info("SERVICE createSession robotId={} childId={} topicId={}",
                 request.getRobotId(), request.getChildId(), request.getTopicId());
         Robot robot = robotRepository.findById(request.getRobotId())
-                .orElseThrow(() -> new AppException(HttpStatus.NOT_FOUND, "ROBOT_NOT_FOUND", "Robot not found"));
+                .orElseThrow(() -> new AppException(ErrorCode.ROBOT_NOT_FOUND));
 
         ConversationSession session = new ConversationSession();
         session.setId(UUID.randomUUID());
@@ -49,7 +50,7 @@ public class ConversationService {
 
         if (request.getChildId() != null) {
             Child child = childRepository.findById(request.getChildId())
-                    .orElseThrow(() -> new AppException(HttpStatus.NOT_FOUND, "CHILD_NOT_FOUND", "Child not found"));
+                    .orElseThrow(() -> new AppException(ErrorCode.CHILD_NOT_FOUND));
             session.setChild(child);
         }
 
@@ -61,7 +62,7 @@ public class ConversationService {
     @Transactional(readOnly = true)
     public ConversationSession getSessionEntity(UUID sessionId) {
         return conversationSessionRepository.findById(sessionId)
-                .orElseThrow(() -> new AppException(HttpStatus.NOT_FOUND, "SESSION_NOT_FOUND", "Conversation session not found"));
+                .orElseThrow(() -> new AppException(ErrorCode.SESSION_NOT_FOUND));
     }
 
     @Transactional(readOnly = true)

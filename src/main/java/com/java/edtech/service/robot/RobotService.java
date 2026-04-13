@@ -5,6 +5,7 @@ import java.util.UUID;
 
 import com.java.edtech.api.robot.dto.RobotSummaryResponse;
 import com.java.edtech.common.exception.AppException;
+import com.java.edtech.common.exception.ErrorCode;
 import com.java.edtech.domain.entity.AppUser;
 import com.java.edtech.domain.entity.Robot;
 import com.java.edtech.repository.AppUserRepository;
@@ -43,9 +44,9 @@ public class RobotService {
     private AppUser getCurrentUserOrThrow() {
         UUID userId = getCurrentUserId();
         AppUser user = appUserRepository.findById(userId)
-                .orElseThrow(() -> new AppException(HttpStatus.NOT_FOUND, "USER_NOT_FOUND", "User not found"));
+                .orElseThrow(() -> new AppException(ErrorCode.USER_NOT_FOUND));
         if (!user.isActive()) {
-            throw new AppException(HttpStatus.FORBIDDEN, "USER_INACTIVE", "User is inactive");
+            throw new AppException(ErrorCode.USER_INACTIVE);
         }
         return user;
     }
@@ -53,13 +54,13 @@ public class RobotService {
     private UUID getCurrentUserId() {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         if (authentication == null || authentication.getPrincipal() == null) {
-            throw new AppException(HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", "Unauthorized");
+            throw new AppException(ErrorCode.UNAUTHORIZED);
         }
 
         try {
             return UUID.fromString(authentication.getPrincipal().toString());
         } catch (IllegalArgumentException ex) {
-            throw new AppException(HttpStatus.UNAUTHORIZED, "INVALID_TOKEN", "Invalid token");
+            throw new AppException(ErrorCode.INVALID_TOKEN);
         }
     }
 }
