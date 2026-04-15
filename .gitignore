@@ -45,3 +45,8 @@ build/
 /API-new/
 /mobile.md
 
+/spiffs.bin
+/data/audio/cant_connect_wifi.wav
+/data/audio/no_speech.wav
+/README.md
+/data/audio/start_success.wav

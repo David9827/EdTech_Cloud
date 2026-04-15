@@ -1,9 +1,13 @@
 package com.java.edtech.service.reminder;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.Base64;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.UUID;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.java.edtech.api.reminder.dto.CreateReminderRequest;
 import com.java.edtech.api.reminder.dto.ReminderExecuteDataResponse;
 import com.java.edtech.api.reminder.dto.ReminderPageResponse;
@@ -19,11 +23,13 @@ import com.java.edtech.repository.AppUserRepository;
 import com.java.edtech.repository.ChildRepository;
 import com.java.edtech.repository.ReminderRepository;
 import com.java.edtech.repository.RobotRepository;
+import com.java.edtech.service.robot.TtsAudioResult;
+import com.java.edtech.service.robot.TtsService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
-import org.springframework.http.HttpStatus;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -31,11 +37,18 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class ReminderService {
     private static final ZoneId REMINDER_LOCAL_ZONE = ZoneId.of("Asia/Bangkok");
+    private static final String REDIS_REMINDER_AUDIO_KEY_PREFIX = "reminder:audio:";
+    private static final Duration REMINDER_AUDIO_TTL = Duration.ofHours(2);
 
     private final ReminderRepository reminderRepository;
     private final AppUserRepository appUserRepository;
     private final ChildRepository childRepository;
     private final RobotRepository robotRepository;
+    private final TtsService ttsService;
+    private final StringRedisTemplate stringRedisTemplate;
+    private final ObjectMapper objectMapper;
+
+    private final ConcurrentHashMap<UUID, TtsAudioResult> reminderAudioCache = new ConcurrentHashMap<>();
 
     @Transactional
     public ReminderResponse createReminder(CreateReminderRequest request) {
@@ -68,6 +81,7 @@ public class ReminderService {
         reminder.setStatus(ReminderStatus.ACTIVE);
 
         Reminder saved = reminderRepository.save(reminder);
+        prefetchReminderAudio(saved);
         return toResponse(saved);
     }
 
@@ -80,12 +94,7 @@ public class ReminderService {
 
     @Transactional(readOnly = true)
     public ReminderExecuteDataResponse getExecuteData(UUID reminderId) {
-        Reminder reminder = reminderRepository.findById(reminderId)
-                .orElseThrow(() -> new AppException(ErrorCode.REMINDER_NOT_FOUND));
-
-        if (reminder.getStatus() == ReminderStatus.CANCELLED) {
-            throw new AppException(ErrorCode.REMINDER_CANCELLED);
-        }
+        Reminder reminder = resolveExecutableReminder(reminderId);
 
         return ReminderExecuteDataResponse.builder()
                 .reminderId(reminder.getId())
@@ -95,6 +104,12 @@ public class ReminderService {
                 .message(reminder.getMessage())
                 .scheduleAt(reminder.getScheduleAt())
                 .build();
+    }
+
+    @Transactional(readOnly = true)
+    public TtsAudioResult getExecuteAudio(UUID reminderId) {
+        Reminder reminder = resolveExecutableReminder(reminderId);
+        return getReminderAudio(reminder);
     }
 
     @Transactional
@@ -131,6 +146,111 @@ public class ReminderService {
                 .build();
     }
 
+    private Reminder resolveExecutableReminder(UUID reminderId) {
+        Reminder reminder = reminderRepository.findById(reminderId)
+                .orElseThrow(() -> new AppException(ErrorCode.REMINDER_NOT_FOUND));
+        if (reminder.getStatus() == ReminderStatus.CANCELLED) {
+            throw new AppException(ErrorCode.REMINDER_CANCELLED);
+        }
+        return reminder;
+    }
+
+    private void prefetchReminderAudio(Reminder reminder) {
+        try {
+            getReminderAudio(reminder);
+        } catch (Exception ignored) {
+        }
+    }
+
+    private TtsAudioResult getReminderAudio(Reminder reminder) {
+        TtsAudioResult inMemory = reminderAudioCache.get(reminder.getId());
+        if (inMemory != null) {
+            return inMemory;
+        }
+
+        TtsAudioResult fromRedis = getReminderAudioFromRedis(reminder.getId());
+        if (fromRedis != null) {
+            reminderAudioCache.put(reminder.getId(), fromRedis);
+            return fromRedis;
+        }
+
+        String speechText = buildReminderSpeechText(reminder);
+        if (speechText.isBlank()) {
+            TtsAudioResult empty = emptyAudio();
+            reminderAudioCache.put(reminder.getId(), empty);
+            return empty;
+        }
+
+        TtsAudioResult generated = ttsService.synthesize(speechText);
+        reminderAudioCache.put(reminder.getId(), generated);
+        saveReminderAudioToRedis(reminder.getId(), generated);
+        return generated;
+    }
+
+    private String buildReminderSpeechText(Reminder reminder) {
+        String title = reminder.getTitle() == null ? "" : reminder.getTitle().trim();
+        String message = reminder.getMessage() == null ? "" : reminder.getMessage().trim();
+        if (!title.isEmpty() && !message.isEmpty()) {
+            return title + ". " + message;
+        }
+        return title.isEmpty() ? message : title;
+    }
+
+    private void saveReminderAudioToRedis(UUID reminderId, TtsAudioResult audio) {
+        try {
+            if (audio == null || audio.getAudioBytes() == null || audio.getAudioBytes().length == 0) {
+                return;
+            }
+
+            ReminderAudioCachePayload payload = new ReminderAudioCachePayload(
+                    Base64.getEncoder().encodeToString(audio.getAudioBytes()),
+                    audio.getMimeType(),
+                    audio.getSampleRate(),
+                    audio.getChannels()
+            );
+
+            String serialized = objectMapper.writeValueAsString(payload);
+            stringRedisTemplate.opsForValue().set(reminderAudioKey(reminderId), serialized, REMINDER_AUDIO_TTL);
+        } catch (Exception ignored) {
+        }
+    }
+
+    private TtsAudioResult getReminderAudioFromRedis(UUID reminderId) {
+        try {
+            String payload = stringRedisTemplate.opsForValue().get(reminderAudioKey(reminderId));
+            if (payload == null || payload.isBlank()) {
+                return null;
+            }
+
+            ReminderAudioCachePayload cached = objectMapper.readValue(payload, ReminderAudioCachePayload.class);
+            if (cached.audioBase64() == null || cached.audioBase64().isBlank()) {
+                return null;
+            }
+
+            return TtsAudioResult.builder()
+                    .audioBytes(Base64.getDecoder().decode(cached.audioBase64()))
+                    .mimeType(cached.mimeType())
+                    .sampleRate(cached.sampleRate())
+                    .channels(cached.channels())
+                    .build();
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private String reminderAudioKey(UUID reminderId) {
+        return REDIS_REMINDER_AUDIO_KEY_PREFIX + reminderId;
+    }
+
+    private TtsAudioResult emptyAudio() {
+        return TtsAudioResult.builder()
+                .audioBytes(new byte[0])
+                .mimeType("audio/wav")
+                .sampleRate(16000)
+                .channels(1)
+                .build();
+    }
+
     private ReminderResponse toResponse(Reminder reminder) {
         return ReminderResponse.builder()
                 .id(reminder.getId())
@@ -146,5 +266,8 @@ public class ReminderService {
                 .cancelledAt(reminder.getCancelledAt())
                 .doneAt(reminder.getDoneAt())
                 .build();
+    }
+
+    private record ReminderAudioCachePayload(String audioBase64, String mimeType, Integer sampleRate, Integer channels) {
     }
 }

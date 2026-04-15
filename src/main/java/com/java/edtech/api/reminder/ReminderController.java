@@ -7,9 +7,13 @@ import com.java.edtech.api.reminder.dto.ReminderApiResponse;
 import com.java.edtech.api.reminder.dto.ReminderExecuteDataResponse;
 import com.java.edtech.api.reminder.dto.ReminderPageResponse;
 import com.java.edtech.api.reminder.dto.ReminderResponse;
+import com.java.edtech.service.robot.TtsAudioResult;
 import com.java.edtech.service.reminder.ReminderService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -54,6 +58,27 @@ public class ReminderController {
     public ResponseEntity<ReminderApiResponse<ReminderExecuteDataResponse>> getExecuteData(@PathVariable UUID reminderId) {
         ReminderExecuteDataResponse response = reminderService.getExecuteData(reminderId);
         return ResponseEntity.ok(ReminderApiResponse.ok("Reminder execute data fetched", response));
+    }
+
+    @GetMapping("/{reminderId}/execute-audio")
+    public ResponseEntity<byte[]> getExecuteAudio(@PathVariable UUID reminderId) {
+        TtsAudioResult audio = reminderService.getExecuteAudio(reminderId);
+        HttpHeaders headers = new HttpHeaders();
+
+        String mime = audio.getMimeType() == null ? "audio/wav" : audio.getMimeType();
+        headers.setContentType(MediaType.parseMediaType(mime));
+        if (audio.getSampleRate() != null) {
+            headers.set("X-Sample-Rate", String.valueOf(audio.getSampleRate()));
+        }
+        if (audio.getChannels() != null) {
+            headers.set("X-Channels", String.valueOf(audio.getChannels()));
+        }
+
+        byte[] payload = audio.getAudioBytes() == null ? new byte[0] : audio.getAudioBytes();
+        if (payload.length == 0) {
+            return new ResponseEntity<>(payload, headers, HttpStatus.NO_CONTENT);
+        }
+        return new ResponseEntity<>(payload, headers, HttpStatus.OK);
     }
 
     @PatchMapping("/{reminderId}/cancel")
