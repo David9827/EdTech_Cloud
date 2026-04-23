@@ -9,8 +9,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_ST7789.h>
+#include <TFT_22_ILI9225.h>
 
 /*
   ============================================================
@@ -24,8 +23,7 @@
 
   Required Arduino libraries:
   - ArduinoJson (by Benoit Blanchon)
-  - Adafruit GFX Library
-  - Adafruit ST7735 and ST7789 Library
+  - TFT_22_ILI9225 (ILI9225 display driver)
   - ESP32 core (for WiFi/HTTPClient/I2S)
 
   Optional extension:
@@ -64,16 +62,16 @@ static const int QA_MIC_CHUNK_BYTES = 640; // 20 ms at 16kHz mono 16-bit PCM
 static const char* QA_AUDIO_FORMAT = "PCM_16BIT";
 static const int QA_WAV_HEADER_BYTES = 44;
 static const uint32_t QA_WAIT_SPEECH_TIMEOUT_MS = 4500;
-static const uint32_t QA_FORCE_START_MS = 1600;
+static const uint32_t QA_FORCE_START_MS = 1000;
 static const bool QA_ENABLE_FORCE_START = true;
-static const uint8_t QA_FORCE_START_MIN_HITS = 2;
+static const uint8_t QA_FORCE_START_MIN_HITS = 1;
 static const uint32_t QA_MAX_UTTERANCE_MS = 9000;
 static const uint32_t QA_MIN_UTTERANCE_MS = 500;
 static const uint32_t QA_END_SILENCE_MS = 850;
-static const uint8_t QA_SPEECH_HIT_FRAMES = 3;
+static const uint8_t QA_SPEECH_HIT_FRAMES = 2;
 static const uint8_t QA_PREROLL_FRAMES = 12;
-static const int QA_VAD_MIN_ABS = 235;
-static const float QA_VAD_THRESHOLD_MULTIPLIER = 1.52f;
+static const int QA_VAD_MIN_ABS = 205;
+static const float QA_VAD_THRESHOLD_MULTIPLIER = 1.36f;
 static const float QA_VAD_NOISE_EMA_ALPHA = 0.06f;
 static const uint16_t QA_VAD_MIN_ZCR = 6;
 static const uint16_t QA_VAD_MAX_ZCR = 140;
@@ -82,15 +80,23 @@ static const uint16_t QA_VAD_WEAK_MAX_ZCR = 170;
 static const float QA_VAD_MAX_PEAK_TO_AVG = 14.0f;
 static const bool AUTO_QA_ENABLED = true;
 static const bool AUTO_QA_LISTEN_IN_IDLE = true;
+static const bool AUTO_QA_LISTEN_DURING_STORY = true;
 static const uint32_t AUTO_QA_COOLDOWN_MS = 1200;
-static const uint8_t AUTO_QA_HIT_FRAMES = 4;
-static const int AUTO_QA_MIN_ABS = 230;
-static const float AUTO_QA_THRESHOLD_MULTIPLIER = 1.50f;
+static const uint8_t AUTO_QA_HIT_FRAMES = 3;
+static const int AUTO_QA_MIN_ABS = 205;
+static const float AUTO_QA_THRESHOLD_MULTIPLIER = 1.34f;
 static const float AUTO_QA_NOISE_EMA_ALPHA = 0.06f;
 static const uint16_t AUTO_QA_MIN_ZCR = 7;
 static const uint16_t AUTO_QA_MAX_ZCR = 145;
 static const float AUTO_QA_MAX_PEAK_TO_AVG = 15.0f;
-static const bool AUTO_QA_ALLOW_BARGE_IN_DURING_QA_TTS = true;
+static const uint8_t AUTO_QA_STORY_HIT_FRAMES = 6;
+static const int AUTO_QA_STORY_MIN_ABS = 290;
+static const float AUTO_QA_STORY_THRESHOLD_MULTIPLIER = 2.00f;
+static const uint16_t AUTO_QA_STORY_MIN_ZCR = 8;
+static const uint16_t AUTO_QA_STORY_MAX_ZCR = 145;
+static const float AUTO_QA_STORY_MAX_PEAK_TO_AVG = 12.0f;
+static const float AUTO_QA_STORY_MIN_PEAK_TO_AVG = 1.20f;
+static const bool AUTO_QA_ALLOW_BARGE_IN_DURING_QA_TTS = false;
 static const uint32_t AUTO_QA_QA_TTS_GUARD_MS = 350;
 static const int AUTO_QA_QA_TTS_MIN_ABS = 260;
 static const float AUTO_QA_QA_TTS_THRESHOLD_MULTIPLIER = 1.75f;
@@ -108,6 +114,19 @@ static const uint32_t BOOT_BUTTON_DEBOUNCE_MS = 45;
 static const float AUDIO_OUTPUT_GAIN = 0.9f; // 1.0 = original volume
 static const uint32_t COMMAND_PULL_INTERVAL_MS = 1000;
 static const uint8_t COMMAND_QUEUE_DEPTH = 8;
+static const uint32_t AUTO_QA_SPEAKER_GUARD_MS = 900;
+static const uint32_t QA_CAPTURE_SPEAKER_GUARD_MS = 600;
+static const bool AEC_ENABLED = true;
+static const uint16_t AEC_REF_RING_SAMPLES = 8192; // 16kHz domain ring for speaker reference.
+static const uint16_t AEC_PATH_DELAY_SAMPLES = 220; // ~13.7 ms at 16kHz, tune per enclosure.
+static const float AEC_ADAPT_RATE = 0.18f;
+static const int AEC_ADAPT_MIN_REF_ABS = 110;
+static const float AEC_MAX_ECHO_GAIN = 1.6f;
+static const bool TFT_THROTTLE_UI_FOR_AUDIO = true;
+static const uint32_t TFT_UI_FRAME_MIN_INTERVAL_MS = 120;
+// ILI9225 native is 176x220. We use landscape (orientation=1) to keep old UI layout.
+static const int TFT_SCREEN_W = 220;
+static const int TFT_SCREEN_H = 176;
 
 // ========================= 1.1) PIN MAP (from robot_example.ino) =========================
 #define I2S_MIC_WS 6
@@ -121,15 +140,19 @@ static const uint8_t COMMAND_QUEUE_DEPTH = 8;
 #define TFT_SCLK 10
 #define TFT_MOSI 11
 #define TFT_RST 12
-#define TFT_DC 13
-#define TFT_BLK 14
-#define TFT_CS 9
+#define TFT_RS 13
+#define TFT_CS 14
+#define TFT_LED 0
+// Keep existing code paths compatible with old symbol names.
+#define TFT_DC TFT_RS
+#define TFT_BLK TFT_LED
 
 #define LED_R 47
 #define LED_G 39
 #define LED_B 21
 #define BOOT_BUTTON_PIN 0
 static const bool BOOT_BUTTON_ACTIVE_LOW = true;
+static const bool BOOT_BUTTON_TOGGLE_ENABLED = false; // Use Serial 'B'/'b' only.
 
 // ========================= 2) APP STATE =========================
 enum RobotState {
@@ -147,17 +170,33 @@ bool g_storyCompleted = false;
 unsigned long g_lastWifiAttemptMs = 0;
 uint32_t g_wifiRetryCount = 0;
 bool g_wifiWasConnected = false;
-Adafruit_ST7789 g_tft = Adafruit_ST7789(&SPI, TFT_CS, TFT_DC, TFT_RST);
+TFT_22_ILI9225 g_tft = TFT_22_ILI9225(TFT_RST, TFT_RS, TFT_CS, TFT_LED);
 bool g_tftReady = false;
 bool g_i2sTxReady = false;
 unsigned long g_lastUiTextMs = 0;
 bool g_textUiEnabled = false;
 bool g_wifiUiEnabled = true;
 bool g_hasEverWifiConnected = false;
+unsigned long g_lastFaceUiRenderMs = 0;
 
-static const uint16_t EYE_COLOR = ST77XX_CYAN;
-static const uint16_t EYE_BG_COLOR = ST77XX_BLACK;
+static const uint16_t ST77XX_BLACK = COLOR_BLACK;
+static const uint16_t ST77XX_WHITE = COLOR_WHITE;
+static const uint16_t ST77XX_BLUE = COLOR_BLUE;
+static const uint16_t ST77XX_GREEN = COLOR_GREEN;
+static const uint16_t ST77XX_RED = COLOR_RED;
+static const uint16_t ST77XX_CYAN = COLOR_CYAN;
+static const uint16_t EYE_COLOR = COLOR_CYAN;
+static const uint16_t EYE_BG_COLOR = COLOR_BLACK;
 static const uint16_t EYE_TEXT_HOLD_MS = 1200;
+static const int EYE_NORMAL_HEIGHT = 86;
+static const int EYE_MAX_HEIGHT = 86;
+static const int EYE_WIDTH = 58;
+static const int EYE_LEFT_X_BASE = 32;
+static const int EYE_RIGHT_X_BASE = 130;
+static const int EYE_BASE_Y = 48;
+static const int EYE_CORNER_RADIUS = 18;
+static const int TFT_FONT_H = 16;
+static const int TFT_FONT_LINE_H = 18;
 
 struct EyeFrame {
   int offsetX;
@@ -245,6 +284,12 @@ unsigned long g_statsLastDrawMs = 0;
 bool g_bootButtonRawReleased = true;
 bool g_bootButtonStableReleased = true;
 unsigned long g_bootButtonLastChangeMs = 0;
+bool g_bootButtonEnabled = true;
+volatile unsigned long g_lastSpeakerAudioMs = 0;
+int16_t g_aecRefRing[AEC_REF_RING_SAMPLES] = {0};
+volatile uint32_t g_aecRefWritePos = 0;
+volatile uint32_t g_aecResampleAcc = 0;
+float g_aecEchoGain = 0.25f;
 
 struct AudioOutChunk {
   uint16_t len = 0;
@@ -287,12 +332,15 @@ struct PlaybackResponse {
 
 bool pullCommandFromServer(PulledCommand& outCmd);
 void executeCommand(const PulledCommand& cmd);
+PlaybackResponse getReminderExecuteAudio(const String& reminderId);
+void preemptForReminderPriority();
 bool isCurrentQaUtterance(const DynamicJsonDocument& doc);
 void drawRobotEyebrows(int leftX, int rightX, int eyeWidth, int eyeTopY, int browLift, int browTilt, bool isHappy);
 void drawRobotEyes(int offsetX, int offsetY, int height, bool isHappy, int browLift = 0, int browTilt = 2);
 void drawListeningEyes(uint8_t phase);
 void tickEyeAnimation();
 void tickFaceUi();
+void maybeTickFaceUi();
 void pumpUiAndControlDuringBlockingWork();
 void initSpiffsStorage();
 bool playWavPromptFromSpiffs(const char* path, bool allowAbort);
@@ -313,6 +361,15 @@ void tickBootButtonToggle();
 void toggleStatsOverlay();
 void drawStatsOverlay(bool forceDraw);
 bool isBootButtonReleased();
+void markSpeakerAudioActivity();
+bool isSpeakerLikelyActive(uint32_t guardMs);
+void aecPushSpeakerReference(const uint8_t* data, size_t bytesLen);
+void applyAecToMicFrame(uint8_t* data, size_t bytesLen);
+void tftFillScreen(uint16_t color);
+void tftFillRectXYWH(int x, int y, int w, int h, uint16_t color);
+void tftFillRoundRectCompat(int x, int y, int w, int h, int radius, uint16_t color);
+void tftDrawTextLine(int x, int y, const char* text, uint16_t color);
+void tftDrawMultilineText(int x, int y, const String& text, uint16_t color);
 
 // ========================= 4) HW INIT + UI =========================
 void setStatusLed(bool r, bool g, bool b) {
@@ -325,6 +382,113 @@ void setStatusColor(uint16_t color) {
   setStatusLed(color == ST77XX_RED, color == ST77XX_GREEN, color == ST77XX_BLUE);
 }
 
+void tftFillScreen(uint16_t color) {
+  g_tft.fillRectangle(0, 0, TFT_SCREEN_W - 1, TFT_SCREEN_H - 1, color);
+}
+
+void tftFillRectXYWH(int x, int y, int w, int h, uint16_t color) {
+  if (w <= 0 || h <= 0) {
+    return;
+  }
+
+  int x1 = x;
+  int y1 = y;
+  int x2 = x + w - 1;
+  int y2 = y + h - 1;
+
+  if (x2 < 0 || y2 < 0 || x1 >= TFT_SCREEN_W || y1 >= TFT_SCREEN_H) {
+    return;
+  }
+
+  if (x1 < 0) x1 = 0;
+  if (y1 < 0) y1 = 0;
+  if (x2 >= TFT_SCREEN_W) x2 = TFT_SCREEN_W - 1;
+  if (y2 >= TFT_SCREEN_H) y2 = TFT_SCREEN_H - 1;
+  g_tft.fillRectangle((uint16_t)x1, (uint16_t)y1, (uint16_t)x2, (uint16_t)y2, color);
+}
+
+void tftFillRoundRectCompat(int x, int y, int w, int h, int radius, uint16_t color) {
+  if (w <= 0 || h <= 0) {
+    return;
+  }
+
+  int r = radius;
+  if (r < 0) {
+    r = 0;
+  }
+  if (r > (w / 2)) {
+    r = w / 2;
+  }
+  if (r > (h / 2)) {
+    r = h / 2;
+  }
+
+  if (r == 0) {
+    tftFillRectXYWH(x, y, w, h, color);
+    return;
+  }
+
+  tftFillRectXYWH(x + r, y, w - (2 * r), h, color);
+  tftFillRectXYWH(x, y + r, r, h - (2 * r), color);
+  tftFillRectXYWH(x + w - r, y + r, r, h - (2 * r), color);
+
+  g_tft.fillCircle((uint8_t)(x + r), (uint8_t)(y + r), (uint8_t)r, color);
+  g_tft.fillCircle((uint8_t)(x + w - r - 1), (uint8_t)(y + r), (uint8_t)r, color);
+  g_tft.fillCircle((uint8_t)(x + r), (uint8_t)(y + h - r - 1), (uint8_t)r, color);
+  g_tft.fillCircle((uint8_t)(x + w - r - 1), (uint8_t)(y + h - r - 1), (uint8_t)r, color);
+}
+
+void tftDrawTextLine(int x, int y, const char* text, uint16_t color) {
+  if (text == nullptr || text[0] == '\0') {
+    return;
+  }
+  g_tft.drawText((uint16_t)x, (uint16_t)y, String(text), color);
+}
+
+void tftDrawMultilineText(int x, int y, const String& text, uint16_t color) {
+  int maxChars = (TFT_SCREEN_W - x) / 11;
+  if (maxChars < 1) {
+    maxChars = 1;
+  }
+
+  char line[40];
+  int lineLen = 0;
+  int cursorY = y;
+
+  for (size_t i = 0; i < text.length(); ++i) {
+    char c = text.charAt((unsigned int)i);
+    bool forceFlush = false;
+    if (c == '\r') {
+      continue;
+    }
+    if (c == '\n') {
+      forceFlush = true;
+    } else {
+      if (lineLen < (int)sizeof(line) - 1) {
+        line[lineLen++] = c;
+      }
+      if (lineLen >= maxChars) {
+        forceFlush = true;
+      }
+    }
+
+    if (forceFlush) {
+      line[lineLen] = '\0';
+      tftDrawTextLine(x, cursorY, line, color);
+      cursorY += TFT_FONT_LINE_H;
+      lineLen = 0;
+      if (cursorY > (TFT_SCREEN_H - TFT_FONT_H)) {
+        return;
+      }
+    }
+  }
+
+  if (lineLen > 0 && cursorY <= (TFT_SCREEN_H - TFT_FONT_H)) {
+    line[lineLen] = '\0';
+    tftDrawTextLine(x, cursorY, line, color);
+  }
+}
+
 void showTextOnTft(const String& message, uint16_t color = ST77XX_WHITE) {
   if (!g_tftReady || !g_textUiEnabled) {
     return;
@@ -332,11 +496,8 @@ void showTextOnTft(const String& message, uint16_t color = ST77XX_WHITE) {
 
   g_eyeAnimActive = false;
   g_lastUiTextMs = millis();
-  g_tft.fillScreen(ST77XX_BLACK);
-  g_tft.setCursor(0, 30);
-  g_tft.setTextColor(color);
-  g_tft.setTextWrap(true);
-  g_tft.println(message);
+  tftFillScreen(ST77XX_BLACK);
+  tftDrawMultilineText(2, 24, message, color);
 }
 
 void showWifiStatusOnTft(const String& message, uint16_t color = ST77XX_WHITE) {
@@ -344,11 +505,8 @@ void showWifiStatusOnTft(const String& message, uint16_t color = ST77XX_WHITE) {
     return;
   }
 
-  g_tft.fillScreen(ST77XX_BLACK);
-  g_tft.setCursor(0, 30);
-  g_tft.setTextColor(color);
-  g_tft.setTextWrap(true);
-  g_tft.println(message);
+  tftFillScreen(ST77XX_BLACK);
+  tftDrawMultilineText(2, 24, message, color);
 }
 
 void onFirstWifiConnected() {
@@ -365,7 +523,7 @@ void onFirstWifiConnected() {
   const unsigned long now = millis();
   g_lastUiTextMs = (now > EYE_TEXT_HOLD_MS) ? (now - EYE_TEXT_HOLD_MS) : 0;
   if (g_tftReady) {
-    g_tft.fillScreen(EYE_BG_COLOR);
+    tftFillScreen(EYE_BG_COLOR);
   }
 }
 
@@ -406,25 +564,25 @@ void drawRobotEyes(int offsetX, int offsetY, int height, bool isHappy, int browL
 
   if (height < 6) {
     height = 6;
-  } else if (height > 90) {
-    height = 90;
+  } else if (height > EYE_MAX_HEIGHT) {
+    height = EYE_MAX_HEIGHT;
   }
 
-  const int eyeWidth = 60;
-  const int normalHeight = 90;
-  const int leftX = 40 + offsetX;
-  const int rightX = 140 + offsetX;
-  const int y = 75 + offsetY + (normalHeight - height) / 2;
+  const int eyeWidth = EYE_WIDTH;
+  const int normalHeight = EYE_NORMAL_HEIGHT;
+  const int leftX = EYE_LEFT_X_BASE + offsetX;
+  const int rightX = EYE_RIGHT_X_BASE + offsetX;
+  const int y = EYE_BASE_Y + offsetY + (normalHeight - height) / 2;
 
-  // Chi xoa khu vuc mat de giam giat man hinh.
-  g_tft.fillRect(0, 20, 240, 200, EYE_BG_COLOR);
+  // Clear full eye band to avoid residual pixels on left/right edges.
+  tftFillRectXYWH(0, 12, TFT_SCREEN_W, 132, EYE_BG_COLOR);
 
-  g_tft.fillRoundRect(leftX, y, eyeWidth, height, 20, EYE_COLOR);
-  g_tft.fillRoundRect(rightX, y, eyeWidth, height, 20, EYE_COLOR);
+  tftFillRoundRectCompat(leftX, y, eyeWidth, height, EYE_CORNER_RADIUS, EYE_COLOR);
+  tftFillRoundRectCompat(rightX, y, eyeWidth, height, EYE_CORNER_RADIUS, EYE_COLOR);
 
   if (isHappy) {
-    g_tft.fillCircle(leftX + (eyeWidth / 2), y + height, 40, EYE_BG_COLOR);
-    g_tft.fillCircle(rightX + (eyeWidth / 2), y + height, 40, EYE_BG_COLOR);
+    g_tft.fillCircle((uint8_t)(leftX + (eyeWidth / 2)), (uint8_t)(y + height), 28, EYE_BG_COLOR);
+    g_tft.fillCircle((uint8_t)(rightX + (eyeWidth / 2)), (uint8_t)(y + height), 28, EYE_BG_COLOR);
   }
 
   drawRobotEyebrows(leftX, rightX, eyeWidth, y, browLift, browTilt, isHappy);
@@ -517,6 +675,36 @@ void tickFaceUi() {
   }
 }
 
+void maybeTickFaceUi() {
+  if (!g_tftReady) {
+    return;
+  }
+
+  const unsigned long now = millis();
+  if (g_lastFaceUiRenderMs != 0 && (now - g_lastFaceUiRenderMs) < TFT_UI_FRAME_MIN_INTERVAL_MS) {
+    return;
+  }
+
+  if (g_statsOverlayEnabled) {
+    g_lastFaceUiRenderMs = now;
+    tickFaceUi();
+    return;
+  }
+
+  // On ILI9225, heavy redraw can starve I2S and cause speaker crackle / mic timeout.
+  if (TFT_THROTTLE_UI_FOR_AUDIO) {
+    if (g_state == STATE_STORY_PLAYING) {
+      return;
+    }
+    if (g_state == STATE_INTERRUPT_QA) {
+      return;
+    }
+  }
+
+  g_lastFaceUiRenderMs = now;
+  tickFaceUi();
+}
+
 void initI2S() {
   i2s_config_t txConfig = {};
   txConfig.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX);
@@ -590,10 +778,12 @@ void initHardware() {
   pinMode(TFT_BLK, OUTPUT);
   digitalWrite(TFT_BLK, HIGH);
   SPI.begin(TFT_SCLK, -1, TFT_MOSI, TFT_CS);
-  g_tft.init(240, 240, SPI_MODE3);
-  g_tft.setRotation(1);
-  g_tft.setTextSize(2);
-  g_tft.setTextColor(ST77XX_WHITE);
+  g_tft.begin(SPI);
+  g_tft.setOrientation(3);
+  g_tft.setBacklight(true);
+  g_tft.setBackgroundColor(COLOR_BLACK);
+  g_tft.setFont(Terminal11x16);
+  tftFillScreen(ST77XX_BLACK);
   g_tftReady = true;
 
   initBootButtonToggle();
@@ -658,10 +848,119 @@ void pumpUiAndControlDuringBlockingWork() {
     }
   }
 
-  tickFaceUi();
+  maybeTickFaceUi();
 }
 
 // ========================= 5.1) AUDIO OUTPUT PIPELINE =========================
+void markSpeakerAudioActivity() {
+  g_lastSpeakerAudioMs = millis();
+}
+
+bool isSpeakerLikelyActive(uint32_t guardMs) {
+  if (g_audioOutQueue != nullptr) {
+    if (uxQueueMessagesWaiting(g_audioOutQueue) > 0) {
+      return true;
+    }
+  }
+
+  if (guardMs == 0) {
+    return false;
+  }
+
+  unsigned long lastMs = g_lastSpeakerAudioMs;
+  if (lastMs == 0) {
+    return false;
+  }
+  return (millis() - lastMs) < guardMs;
+}
+
+void aecPushSpeakerReference(const uint8_t* data, size_t bytesLen) {
+  if (!AEC_ENABLED || data == nullptr || bytesLen < 2) {
+    return;
+  }
+
+  size_t sampleCount = bytesLen / 2;
+  for (size_t i = 0; i < sampleCount; i++) {
+    size_t idx = i * 2;
+    int16_t sample = (int16_t)((uint16_t)data[idx] | ((uint16_t)data[idx + 1] << 8));
+
+    // Downsample speaker reference from output clock (22.05k) to mic clock (16k).
+    g_aecResampleAcc += (uint32_t)AUDIO_SAMPLE_RATE;
+    if (g_aecResampleAcc < (uint32_t)AUDIO_OUTPUT_SAMPLE_RATE) {
+      continue;
+    }
+    g_aecResampleAcc -= (uint32_t)AUDIO_OUTPUT_SAMPLE_RATE;
+
+    uint32_t w = g_aecRefWritePos;
+    g_aecRefRing[w] = sample;
+    w++;
+    if (w >= AEC_REF_RING_SAMPLES) {
+      w = 0;
+    }
+    g_aecRefWritePos = w;
+  }
+}
+
+void applyAecToMicFrame(uint8_t* data, size_t bytesLen) {
+  if (!AEC_ENABLED || data == nullptr || bytesLen < 2) {
+    return;
+  }
+
+  size_t sampleCount = bytesLen / 2;
+  if (sampleCount == 0 || sampleCount >= AEC_REF_RING_SAMPLES) {
+    return;
+  }
+
+  uint32_t writePos = g_aecRefWritePos;
+  int32_t start = (int32_t)writePos - (int32_t)AEC_PATH_DELAY_SAMPLES - (int32_t)sampleCount;
+  while (start < 0) {
+    start += (int32_t)AEC_REF_RING_SAMPLES;
+  }
+  while (start >= (int32_t)AEC_REF_RING_SAMPLES) {
+    start -= (int32_t)AEC_REF_RING_SAMPLES;
+  }
+
+  float gain = g_aecEchoGain;
+
+  for (size_t i = 0; i < sampleCount; i++) {
+    size_t idx = i * 2;
+    int16_t mic = (int16_t)((uint16_t)data[idx] | ((uint16_t)data[idx + 1] << 8));
+
+    uint32_t refIdx = (uint32_t)start + (uint32_t)i;
+    if (refIdx >= AEC_REF_RING_SAMPLES) {
+      refIdx -= AEC_REF_RING_SAMPLES;
+    }
+    int16_t ref = g_aecRefRing[refIdx];
+
+    float echo = gain * (float)ref;
+    float errF = (float)mic - echo;
+    int32_t err = (int32_t)errF;
+
+    if (err > 32767) {
+      err = 32767;
+    } else if (err < -32768) {
+      err = -32768;
+    }
+
+    uint16_t raw = (uint16_t)((int16_t)err);
+    data[idx] = (uint8_t)(raw & 0xFF);
+    data[idx + 1] = (uint8_t)((raw >> 8) & 0xFF);
+
+    int refAbs = ref < 0 ? -ref : ref;
+    if (refAbs >= AEC_ADAPT_MIN_REF_ABS) {
+      float norm = ((float)ref * (float)ref) + 2048.0f;
+      gain += AEC_ADAPT_RATE * (errF * (float)ref) / norm;
+      if (gain < 0.0f) {
+        gain = 0.0f;
+      } else if (gain > AEC_MAX_ECHO_GAIN) {
+        gain = AEC_MAX_ECHO_GAIN;
+      }
+    }
+  }
+
+  g_aecEchoGain = gain;
+}
+
 void audioOutTask(void* pvParameters) {
   (void)pvParameters;
   AudioOutChunk chunk;
@@ -692,6 +991,10 @@ void audioOutTask(void* pvParameters) {
 
     size_t written = 0;
     i2s_write(I2S_NUM_0, chunk.data, chunk.len, &written, portMAX_DELAY);
+    if (written > 0) {
+      aecPushSpeakerReference(chunk.data, written);
+      markSpeakerAudioActivity();
+    }
   }
 }
 
@@ -734,6 +1037,8 @@ void flushAudioOutputNow() {
   }
   if (g_i2sTxReady) {
     i2s_zero_dma_buffer(I2S_NUM_0);
+    // Guard a short time after forced stop to avoid mic re-capturing residual speaker ringing.
+    markSpeakerAudioActivity();
   }
 }
 
@@ -863,6 +1168,18 @@ void playStartSuccessPrompt() {
 }
 
 void initBootButtonToggle() {
+  if (!BOOT_BUTTON_TOGGLE_ENABLED) {
+    g_bootButtonEnabled = false;
+    Serial.println("[BTN] BOOT button toggle disabled by config (use Serial 'B')");
+    return;
+  }
+
+  if (BOOT_BUTTON_PIN == TFT_LED) {
+    g_bootButtonEnabled = false;
+    Serial.println("[BTN] BOOT button toggle disabled (pin conflict with TFT_LED)");
+    return;
+  }
+
   pinMode(BOOT_BUTTON_PIN, INPUT_PULLUP);
   bool released = isBootButtonReleased();
   g_bootButtonRawReleased = released;
@@ -906,56 +1223,63 @@ void drawStatsOverlay(bool forceDraw) {
   uint32_t mm = (uptimeSec % 3600U) / 60U;
   uint32_t ss = uptimeSec % 60U;
 
-  g_tft.fillScreen(ST77XX_BLACK);
-  g_tft.setTextSize(2);
-  g_tft.setTextColor(ST77XX_GREEN);
-  g_tft.setCursor(0, 0);
+  tftFillScreen(ST77XX_BLACK);
 
   char line[64];
-  snprintf(line, sizeof(line), "STATS (BOOT: toggle)");
-  g_tft.println(line);
+  int y = 0;
 
-  snprintf(line, sizeof(line), "CPU: %lu MHz", (unsigned long)cpuMhz);
-  g_tft.println(line);
+  snprintf(line, sizeof(line), "STATS (Serial B)");
+  tftDrawTextLine(0, y, line, ST77XX_GREEN);
+  y += TFT_FONT_LINE_H;
 
-  snprintf(line, sizeof(line), "RAM: %lu/%lu KB (%lu%%)",
+  snprintf(line, sizeof(line), "CPU %lu MHz", (unsigned long)cpuMhz);
+  tftDrawTextLine(0, y, line, ST77XX_GREEN);
+  y += TFT_FONT_LINE_H;
+
+  snprintf(line, sizeof(line), "RAM %lu/%luKB %lu%%",
            (unsigned long)heapUsedKb,
            (unsigned long)heapTotalKb,
            (unsigned long)heapPct);
-  g_tft.println(line);
+  tftDrawTextLine(0, y, line, ST77XX_GREEN);
+  y += TFT_FONT_LINE_H;
 
   if (psTotalKb > 0) {
-    snprintf(line, sizeof(line), "PSRAM: %lu/%lu KB (%lu%%)",
+    snprintf(line, sizeof(line), "PSRAM %lu/%luKB %lu%%",
              (unsigned long)psUsedKb,
              (unsigned long)psTotalKb,
              (unsigned long)psPct);
   } else {
-    snprintf(line, sizeof(line), "PSRAM: N/A");
+    snprintf(line, sizeof(line), "PSRAM N/A");
   }
-  g_tft.println(line);
+  tftDrawTextLine(0, y, line, ST77XX_GREEN);
+  y += TFT_FONT_LINE_H;
 
   if (g_spiffsReady) {
-    snprintf(line, sizeof(line), "DISK: %lu/%lu KB (%lu%%)",
+    snprintf(line, sizeof(line), "DISK %lu/%luKB %lu%%",
              (unsigned long)diskUsedKb,
              (unsigned long)diskTotalKb,
              (unsigned long)diskPct);
   } else {
-    snprintf(line, sizeof(line), "DISK: SPIFFS not mounted");
+    snprintf(line, sizeof(line), "DISK SPIFFS N/A");
   }
-  g_tft.println(line);
+  tftDrawTextLine(0, y, line, ST77XX_GREEN);
+  y += TFT_FONT_LINE_H;
 
-  snprintf(line, sizeof(line), "UP: %02lu:%02lu:%02lu",
+  snprintf(line, sizeof(line), "UP %02lu:%02lu:%02lu",
            (unsigned long)hh,
            (unsigned long)mm,
            (unsigned long)ss);
-  g_tft.println(line);
+  tftDrawTextLine(0, y, line, ST77XX_GREEN);
+  y += TFT_FONT_LINE_H;
 
-  snprintf(line, sizeof(line), "STATE=%d QA=%d WiFi=%s",
+  snprintf(line, sizeof(line), "STATE=%d QA=%d",
            (int)g_state,
-           (int)g_qaStep,
-           WiFi.status() == WL_CONNECTED ? "OK" : "DOWN");
-  g_tft.println(line);
-  g_tft.setTextSize(2);
+           (int)g_qaStep);
+  tftDrawTextLine(0, y, line, ST77XX_GREEN);
+  y += TFT_FONT_LINE_H;
+
+  snprintf(line, sizeof(line), "WIFI %s", WiFi.status() == WL_CONNECTED ? "OK" : "DOWN");
+  tftDrawTextLine(0, y, line, ST77XX_GREEN);
 }
 
 void toggleStatsOverlay() {
@@ -972,7 +1296,7 @@ void toggleStatsOverlay() {
   }
 
   if (g_tftReady) {
-    g_tft.fillScreen(EYE_BG_COLOR);
+    tftFillScreen(EYE_BG_COLOR);
   }
   g_eyeAnimActive = false;
   g_neutralFaceShown = false;
@@ -981,6 +1305,10 @@ void toggleStatsOverlay() {
 }
 
 void tickBootButtonToggle() {
+  if (!g_bootButtonEnabled) {
+    return;
+  }
+
   bool rawReleased = isBootButtonReleased();
   unsigned long now = millis();
 
@@ -1003,6 +1331,10 @@ void tickBootButtonToggle() {
 }
 
 bool isBootButtonReleased() {
+  if (!g_bootButtonEnabled) {
+    return true;
+  }
+
   int level = digitalRead(BOOT_BUTTON_PIN);
   if (BOOT_BUTTON_ACTIVE_LOW) {
     return level == HIGH;
@@ -1112,7 +1444,7 @@ void commandPullTask(void* pvParameters) {
         copyStringToBuf(msg.storyId, sizeof(msg.storyId), pulled.storyId);
         copyStringToBuf(msg.reminderId, sizeof(msg.reminderId), pulled.reminderId);
 
-        if (pulled.type == "STOP_STORY") {
+        if (pulled.type == "STOP_STORY" || pulled.type == "REMINDER_CREATE") {
           g_stopRequested = true;
           flushAudioOutputNow();
           xQueueReset(g_commandQueue);
@@ -1420,6 +1752,11 @@ void resetAutoQaDetector() {
 }
 
 bool autoQaCanListenNow() {
+  // Keep speaker guard for non-story states to suppress speaker feedback.
+  if (g_state != STATE_STORY_PLAYING && isSpeakerLikelyActive(AUTO_QA_SPEAKER_GUARD_MS)) {
+    return false;
+  }
+
   if (g_state == STATE_INTERRUPT_QA) {
     if (!AUTO_QA_ALLOW_BARGE_IN_DURING_QA_TTS) {
       return false;
@@ -1433,7 +1770,7 @@ bool autoQaCanListenNow() {
     return true;
   }
   if (g_state == STATE_STORY_PLAYING) {
-    return true;
+    return AUTO_QA_LISTEN_DURING_STORY;
   }
   if (AUTO_QA_LISTEN_IN_IDLE && g_state == STATE_IDLE) {
     return true;
@@ -1454,6 +1791,10 @@ void tickAutoQaTrigger() {
   if (now - g_lastQaFinishMs < AUTO_QA_COOLDOWN_MS) {
     return;
   }
+  if (g_state != STATE_STORY_PLAYING && isSpeakerLikelyActive(AUTO_QA_SPEAKER_GUARD_MS)) {
+    resetAutoQaDetector();
+    return;
+  }
 
   uint8_t micBuf[QA_MIC_CHUNK_BYTES];
   size_t readBytes = 0;
@@ -1461,6 +1802,7 @@ void tickAutoQaTrigger() {
   if (err != ESP_OK || readBytes == 0) {
     return;
   }
+  applyAecToMicFrame(micBuf, readBytes);
 
   int frameAbs = 0;
   int peakAbs = 0;
@@ -1472,6 +1814,18 @@ void tickAutoQaTrigger() {
   float thresholdF = g_autoQaNoiseEma * AUTO_QA_THRESHOLD_MULTIPLIER;
   if (thresholdF < (float)AUTO_QA_MIN_ABS) {
     thresholdF = (float)AUTO_QA_MIN_ABS;
+  }
+  bool storyBargeInMode = (g_state == STATE_STORY_PLAYING);
+
+  if (storyBargeInMode) {
+    float storyThresholdF = g_autoQaNoiseEma * AUTO_QA_STORY_THRESHOLD_MULTIPLIER;
+    if (storyThresholdF < (float)AUTO_QA_STORY_MIN_ABS) {
+      storyThresholdF = (float)AUTO_QA_STORY_MIN_ABS;
+    }
+    if (thresholdF < storyThresholdF) {
+      thresholdF = storyThresholdF;
+    }
+    requiredHits = AUTO_QA_STORY_HIT_FRAMES;
   }
 
   if (g_state == STATE_INTERRUPT_QA && g_qaStep == QA_STEP_WAIT_TTS_END) {
@@ -1489,6 +1843,10 @@ void tickAutoQaTrigger() {
   bool speechStrong = frameAbs >= threshold;
   bool zcrOk = zcr >= AUTO_QA_MIN_ZCR && zcr <= AUTO_QA_MAX_ZCR;
   bool peakShapeOk = peakToAvg > 0.0f && peakToAvg <= AUTO_QA_MAX_PEAK_TO_AVG;
+  if (storyBargeInMode) {
+    zcrOk = zcr >= AUTO_QA_STORY_MIN_ZCR && zcr <= AUTO_QA_STORY_MAX_ZCR;
+    peakShapeOk = peakToAvg >= AUTO_QA_STORY_MIN_PEAK_TO_AVG && peakToAvg <= AUTO_QA_STORY_MAX_PEAK_TO_AVG;
+  }
   bool speechCandidate = speechStrong && zcrOk && peakShapeOk;
 
   if (!speechCandidate) {
@@ -2136,6 +2494,32 @@ PlaybackResponse postPlaybackNext() {
   return result;
 }
 
+PlaybackResponse getReminderExecuteAudio(const String& reminderId) {
+  PlaybackResponse result;
+  if (reminderId.length() == 0) {
+    return result;
+  }
+
+  HTTPClient http;
+  String url = buildUrl(String("/api/reminders/") + reminderId + "/execute-audio");
+
+  if (!http.begin(url)) {
+    Serial.println("[REMINDER] execute-audio begin failed");
+    return result;
+  }
+
+  http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
+  http.setTimeout(HTTP_READ_TIMEOUT_MS);
+  if (strlen(AUTH_BEARER_TOKEN) > 0) {
+    http.addHeader("Authorization", String("Bearer ") + AUTH_BEARER_TOKEN);
+  }
+
+  int code = http.GET();
+  result = parseAndPlayAudioResponse(http, code);
+  http.end();
+  return result;
+}
+
 // ========================= 9) COMMAND EXECUTOR =========================
 void onStartStory(const String& storyId) {
   if (storyId.length() == 0) {
@@ -2188,10 +2572,75 @@ void onStopStory() {
   printState("after STOP_STORY");
 }
 
+void preemptForReminderPriority() {
+  // Cut current speaker output immediately.
+  g_stopRequested = true;
+  flushAudioOutputNow();
+
+  // If QA/TTS is active, cancel robot output and drop incoming WS binary audio.
+  if (g_state == STATE_INTERRUPT_QA) {
+    g_wsDropBinaryAudio = true;
+    if (g_wsConnected) {
+      sendWsCancelOutput(g_wsActiveOutputUtteranceId);
+    }
+    g_wsActiveOutputUtteranceId = "";
+    g_wsTtsStartMs = 0;
+    g_wsTtsEnd = false;
+    g_qaStep = QA_STEP_IDLE;
+    g_qaStepStartMs = 0;
+    g_qaRecordStartMs = 0;
+    resetQaCaptureState();
+    resetQaWsFlags();
+    g_state = STATE_IDLE;
+    g_resumeStateAfterQa = STATE_IDLE;
+    g_lastQaFinishMs = millis();
+  }
+
+  // End story playback session so reminder can take priority cleanly.
+  if (g_state == STATE_STORY_PLAYING || g_currentStoryId.length() > 0) {
+    callStopPlayback();
+    g_state = STATE_IDLE;
+    g_storyCompleted = true;
+    g_currentStoryId = "";
+  }
+
+  // Allow reminder stream to play.
+  g_stopRequested = false;
+}
+
 void onReminderCreate(const String& reminderId) {
-  // You can call: GET /api/reminders/{reminderId}/execute-data and play reminder audio.
+  // Pull reminder audio from backend, backend will serve from reminder cache when available.
   Serial.printf("[CMD] REMINDER_CREATE reminderId=%s\n", reminderId.c_str());
-  showTextOnTft(String("Reminder create\n") + reminderId);
+  if (reminderId.length() == 0) {
+    Serial.println("[CMD] REMINDER_CREATE missing reminderId");
+    setStatusColor(ST77XX_RED);
+    showTextOnTft("REMINDER_CREATE missing reminderId");
+    return;
+  }
+
+  preemptForReminderPriority();
+  setStatusColor(ST77XX_BLUE);
+  showTextOnTft(String("Reminder\n") + reminderId);
+
+  PlaybackResponse res = getReminderExecuteAudio(reminderId);
+  if (!res.ok) {
+    Serial.printf("[CMD] REMINDER_CREATE failed status=%d reminderId=%s\n", res.httpCode, reminderId.c_str());
+    setStatusColor(ST77XX_RED);
+    showTextOnTft("Reminder audio failed");
+    return;
+  }
+
+  if (res.interrupted || g_state == STATE_INTERRUPT_QA) {
+    if (g_stopRequested) {
+      Serial.printf("[CMD] REMINDER_CREATE interrupted by STOP reminderId=%s\n", reminderId.c_str());
+    } else {
+      Serial.printf("[CMD] REMINDER_CREATE interrupted by QA reminderId=%s\n", reminderId.c_str());
+    }
+    return;
+  }
+
+  Serial.printf("[CMD] REMINDER_CREATE played status=%d bytes=%d mime=%s sr=%d ch=%d\n",
+                res.httpCode, res.bytesLength, res.mimeType.c_str(), res.sampleRate, res.channels);
 }
 
 void onReminderCancel(const String& reminderId) {
@@ -2331,6 +2780,12 @@ void tickInterruptQa() {
       break;
 
     case QA_STEP_STREAM_MIC: {
+      if (isSpeakerLikelyActive(QA_CAPTURE_SPEAKER_GUARD_MS)) {
+        g_qaSpeechHitCount = 0;
+        g_qaRecordStartMs = now;
+        break;
+      }
+
       uint8_t micBuf[QA_MIC_CHUNK_BYTES];
       size_t readBytes = 0;
       esp_err_t err = i2s_read(I2S_NUM_1, micBuf, QA_MIC_CHUNK_BYTES, &readBytes, 20 / portTICK_PERIOD_MS);
@@ -2345,6 +2800,7 @@ void tickInterruptQa() {
         }
         break;
       }
+      applyAecToMicFrame(micBuf, readBytes);
 
       int frameAbs = 0;
       int peakAbs = 0;
@@ -2484,7 +2940,7 @@ void loop() {
   }
 
   tickInterruptQa();
-  tickFaceUi();
+  maybeTickFaceUi();
 
   if (g_state == STATE_STORY_PLAYING && !g_stopRequested) {
     tickStoryPlayback();

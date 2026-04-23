@@ -152,6 +152,7 @@ public class RobotStoryCommandService {
                 .type(command.type())
                 .action(command.action())
                 .storyId(command.storyId())
+                .reminderId(command.reminderId())
                 .issuedAt(command.issuedAt())
                 .expiresAt(command.expiresAt())
                 .build();

@@ -16,6 +16,7 @@ public class RobotStoryCommandResponse {
     private RobotCommandType type;
     private RobotStoryCommandAction action;
     private UUID storyId;
+    private UUID reminderId;
     private Instant issuedAt;
     private Instant expiresAt;
 }

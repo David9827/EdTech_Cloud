@@ -3,10 +3,13 @@
 #include <ArduinoJson.h>
 #include <WebSocketsClient.h>
 #include <SPI.h>
+#include <SPIFFS.h>
 #include <driver/i2s.h>
 #include <string.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_ST7789.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
+#include <freertos/task.h>
+#include <TFT_22_ILI9225.h>
 
 /*
   ============================================================
@@ -20,8 +23,7 @@
 
   Required Arduino libraries:
   - ArduinoJson (by Benoit Blanchon)
-  - Adafruit GFX Library
-  - Adafruit ST7735 and ST7789 Library
+  - TFT_22_ILI9225 (ILI9225 display driver)
   - ESP32 core (for WiFi/HTTPClient/I2S)
 
   Optional extension:
@@ -47,37 +49,68 @@ static const uint16_t WS_PORT = 5999;
 // Optional Bearer token. Keep empty if backend does not require auth.
 static const char* AUTH_BEARER_TOKEN = "";
 
-// Poll intervals (ms)
-static const uint32_t POLL_IDLE_MS = 800;
-static const uint32_t POLL_PLAYING_MS = 2500;
-
 // Timeouts (ms)
 static const uint32_t HTTP_CONNECT_TIMEOUT_MS = 8000;
 static const uint32_t HTTP_READ_TIMEOUT_MS = 15000;
 static const int AUDIO_SAMPLE_RATE = 16000;
+static const int AUDIO_OUTPUT_SAMPLE_RATE = 22050;
 static const uint32_t WIFI_CONNECT_ATTEMPT_MS = 15000;
 static const uint32_t WIFI_RETRY_COOLDOWN_MS = 4000;
 static const uint32_t QA_STEP_TIMEOUT_MS = 12000;
 static const uint32_t QA_WAIT_TTS_END_MS = 25000;
 static const int QA_MIC_CHUNK_BYTES = 640; // 20 ms at 16kHz mono 16-bit PCM
 static const char* QA_AUDIO_FORMAT = "PCM_16BIT";
-static const uint32_t QA_WAIT_SPEECH_TIMEOUT_MS = 7000;
-static const uint32_t QA_FORCE_START_MS = 1800;
+static const int QA_WAV_HEADER_BYTES = 44;
+static const uint32_t QA_WAIT_SPEECH_TIMEOUT_MS = 4500;
+static const uint32_t QA_FORCE_START_MS = 1600;
+static const bool QA_ENABLE_FORCE_START = true;
+static const uint8_t QA_FORCE_START_MIN_HITS = 2;
 static const uint32_t QA_MAX_UTTERANCE_MS = 9000;
 static const uint32_t QA_MIN_UTTERANCE_MS = 500;
 static const uint32_t QA_END_SILENCE_MS = 850;
-static const uint8_t QA_SPEECH_HIT_FRAMES = 4;
-static const uint8_t QA_PREROLL_FRAMES = 8;
-static const int QA_VAD_MIN_ABS = 350;
-static const float QA_VAD_THRESHOLD_MULTIPLIER = 1.8f;
+static const uint8_t QA_SPEECH_HIT_FRAMES = 3;
+static const uint8_t QA_PREROLL_FRAMES = 12;
+static const int QA_VAD_MIN_ABS = 235;
+static const float QA_VAD_THRESHOLD_MULTIPLIER = 1.52f;
 static const float QA_VAD_NOISE_EMA_ALPHA = 0.06f;
+static const uint16_t QA_VAD_MIN_ZCR = 6;
+static const uint16_t QA_VAD_MAX_ZCR = 140;
+static const uint16_t QA_VAD_WEAK_MIN_ZCR = 4;
+static const uint16_t QA_VAD_WEAK_MAX_ZCR = 170;
+static const float QA_VAD_MAX_PEAK_TO_AVG = 14.0f;
 static const bool AUTO_QA_ENABLED = true;
 static const bool AUTO_QA_LISTEN_IN_IDLE = true;
-static const uint32_t AUTO_QA_COOLDOWN_MS = 5000;
-static const uint8_t AUTO_QA_HIT_FRAMES = 6;
-static const int AUTO_QA_MIN_ABS = 320;
-static const float AUTO_QA_THRESHOLD_MULTIPLIER = 1.7f;
-static const float AUTO_QA_NOISE_EMA_ALPHA = 0.05f;
+static const uint32_t AUTO_QA_COOLDOWN_MS = 1200;
+static const uint8_t AUTO_QA_HIT_FRAMES = 4;
+static const int AUTO_QA_MIN_ABS = 230;
+static const float AUTO_QA_THRESHOLD_MULTIPLIER = 1.50f;
+static const float AUTO_QA_NOISE_EMA_ALPHA = 0.06f;
+static const uint16_t AUTO_QA_MIN_ZCR = 7;
+static const uint16_t AUTO_QA_MAX_ZCR = 145;
+static const float AUTO_QA_MAX_PEAK_TO_AVG = 15.0f;
+static const bool AUTO_QA_ALLOW_BARGE_IN_DURING_QA_TTS = true;
+static const uint32_t AUTO_QA_QA_TTS_GUARD_MS = 350;
+static const int AUTO_QA_QA_TTS_MIN_ABS = 260;
+static const float AUTO_QA_QA_TTS_THRESHOLD_MULTIPLIER = 1.75f;
+static const uint8_t AUTO_QA_QA_TTS_HIT_FRAMES = 5;
+static const uint16_t AUDIO_OUT_CHUNK_BYTES = 512;
+static const uint16_t AUDIO_OUT_QUEUE_DEPTH = 96;
+static const uint32_t AUDIO_OUT_ENQUEUE_TIMEOUT_MS = 80;
+static const uint32_t AUDIO_PROMPT_ENQUEUE_TIMEOUT_MS = 150;
+static const uint32_t WIFI_FAIL_PROMPT_COOLDOWN_MS = 15000;
+static const char* AUDIO_PROMPT_CANT_CONNECT_WIFI = "/audio/cant_connect_wifi.wav";
+static const char* AUDIO_PROMPT_NO_SPEECH = "/audio/no_speech.wav";
+static const char* AUDIO_PROMPT_START_SUCCESS = "/audio/start_success.wav";
+static const uint32_t STATS_REFRESH_MS = 800;
+static const uint32_t BOOT_BUTTON_DEBOUNCE_MS = 45;
+static const float AUDIO_OUTPUT_GAIN = 0.9f; // 1.0 = original volume
+static const uint32_t COMMAND_PULL_INTERVAL_MS = 1000;
+static const uint8_t COMMAND_QUEUE_DEPTH = 8;
+static const bool TFT_THROTTLE_UI_FOR_AUDIO = true;
+static const uint32_t TFT_UI_FRAME_MIN_INTERVAL_MS = 120;
+// ILI9225 native is 176x220. We use landscape (orientation=1) to keep old UI layout.
+static const int TFT_SCREEN_W = 220;
+static const int TFT_SCREEN_H = 176;
 
 // ========================= 1.1) PIN MAP (from robot_example.ino) =========================
 #define I2S_MIC_WS 6
@@ -88,15 +121,22 @@ static const float AUTO_QA_NOISE_EMA_ALPHA = 0.05f;
 #define I2S_SPK_BCLK 15
 #define I2S_SPK_LRC 7
 
-#define TFT_SCK 12
-#define TFT_SDA 11
-#define TFT_RES 14
-#define TFT_DC 13
-#define TFT_BLK 10
+#define TFT_SCLK 10
+#define TFT_MOSI 11
+#define TFT_RST 12
+#define TFT_RS 13
+#define TFT_CS 14
+#define TFT_LED 0
+// Keep existing code paths compatible with old symbol names.
+#define TFT_DC TFT_RS
+#define TFT_BLK TFT_LED
 
 #define LED_R 47
 #define LED_G 39
 #define LED_B 21
+#define BOOT_BUTTON_PIN 0
+static const bool BOOT_BUTTON_ACTIVE_LOW = true;
+static const bool BOOT_BUTTON_TOGGLE_ENABLED = false; // Use Serial 'B'/'b' only.
 
 // ========================= 2) APP STATE =========================
 enum RobotState {
@@ -111,13 +151,68 @@ RobotState g_resumeStateAfterQa = STATE_IDLE;
 String g_currentStoryId;
 bool g_storyCompleted = false;
 
-unsigned long g_lastPollMs = 0;
 unsigned long g_lastWifiAttemptMs = 0;
 uint32_t g_wifiRetryCount = 0;
 bool g_wifiWasConnected = false;
-Adafruit_ST7789 g_tft = Adafruit_ST7789(-1, TFT_DC, TFT_RES);
+TFT_22_ILI9225 g_tft = TFT_22_ILI9225(TFT_RST, TFT_RS, TFT_CS, TFT_LED);
 bool g_tftReady = false;
 bool g_i2sTxReady = false;
+unsigned long g_lastUiTextMs = 0;
+bool g_textUiEnabled = false;
+bool g_wifiUiEnabled = true;
+bool g_hasEverWifiConnected = false;
+unsigned long g_lastFaceUiRenderMs = 0;
+
+static const uint16_t ST77XX_BLACK = COLOR_BLACK;
+static const uint16_t ST77XX_WHITE = COLOR_WHITE;
+static const uint16_t ST77XX_BLUE = COLOR_BLUE;
+static const uint16_t ST77XX_GREEN = COLOR_GREEN;
+static const uint16_t ST77XX_RED = COLOR_RED;
+static const uint16_t ST77XX_CYAN = COLOR_CYAN;
+static const uint16_t EYE_COLOR = COLOR_CYAN;
+static const uint16_t EYE_BG_COLOR = COLOR_BLACK;
+static const uint16_t EYE_TEXT_HOLD_MS = 1200;
+static const int EYE_NORMAL_HEIGHT = 86;
+static const int EYE_MAX_HEIGHT = 86;
+static const int EYE_WIDTH = 58;
+static const int EYE_LEFT_X_BASE = 32;
+static const int EYE_RIGHT_X_BASE = 130;
+static const int EYE_BASE_Y = 48;
+static const int EYE_CORNER_RADIUS = 18;
+static const int TFT_FONT_H = 16;
+static const int TFT_FONT_LINE_H = 18;
+
+struct EyeFrame {
+  int offsetX;
+  int offsetY;
+  int height;
+  bool isHappy;
+  int browLift;
+  int browTilt;
+  uint16_t holdMs;
+};
+
+const EyeFrame kIdleEyeFrames[] = {
+  {0, 0, 90, false, 0, 2, 1800},
+  {0, 0, 10, false, 3, 0, 140},
+  {0, 0, 90, false, 1, 3, 750},
+  {-25, 0, 90, false, 2, 3, 950},
+  {25, 0, 90, false, 2, 3, 950},
+  {0, 0, 90, false, 0, 2, 500},
+  {0, 0, 10, false, 3, 0, 100},
+  {0, 0, 90, false, 1, 2, 100},
+  {0, 0, 10, false, 3, 0, 100},
+  {0, 0, 90, false, 0, 2, 500},
+  {0, 0, 90, true, 4, -1, 1800}
+};
+
+bool g_eyeAnimActive = false;
+uint8_t g_eyeFrameIndex = 0;
+unsigned long g_eyeFrameStartMs = 0;
+bool g_listeningFaceShown = false;
+bool g_neutralFaceShown = false;
+uint8_t g_listeningBrowPhase = 0;
+unsigned long g_listeningFaceLastMs = 0;
 
 enum QaStep {
   QA_STEP_IDLE = 0,
@@ -145,23 +240,45 @@ String g_wsErrorCode;
 String g_wsErrorMessage;
 String g_wsLastTranscript;
 String g_wsLastAssistantReply;
+String g_wsActiveOutputUtteranceId;
 int g_wsSkipAudioHeaderBytes = 0;
+unsigned long g_wsTtsStartMs = 0;
 uint32_t g_qaTtsWaitTimeoutMs = QA_WAIT_TTS_END_MS;
 
 bool g_qaSpeechStarted = false;
 unsigned long g_qaSpeechStartMs = 0;
 unsigned long g_qaLastSpeechMs = 0;
 uint8_t g_qaSpeechHitCount = 0;
-float g_qaNoiseEma = 900.0f;
+float g_qaNoiseEma = 300.0f;
 uint32_t g_qaSentAudioBytes = 0;
 uint8_t g_qaPreRollBuf[QA_PREROLL_FRAMES][QA_MIC_CHUNK_BYTES];
 uint16_t g_qaPreRollSize[QA_PREROLL_FRAMES] = {0};
 uint8_t g_qaPreRollWriteIdx = 0;
 uint8_t g_qaPreRollCount = 0;
+bool g_wsDropBinaryAudio = false;
+volatile bool g_stopRequested = false;
 
-float g_autoQaNoiseEma = 900.0f;
+float g_autoQaNoiseEma = 300.0f;
 uint8_t g_autoQaSpeechHits = 0;
 unsigned long g_lastQaFinishMs = 0;
+bool g_spiffsReady = false;
+unsigned long g_lastWifiFailPromptMs = 0;
+bool g_statsOverlayEnabled = false;
+unsigned long g_statsLastDrawMs = 0;
+bool g_bootButtonRawReleased = true;
+bool g_bootButtonStableReleased = true;
+unsigned long g_bootButtonLastChangeMs = 0;
+bool g_bootButtonEnabled = true;
+
+struct AudioOutChunk {
+  uint16_t len = 0;
+  uint8_t data[AUDIO_OUT_CHUNK_BYTES];
+};
+
+QueueHandle_t g_audioOutQueue = nullptr;
+TaskHandle_t g_audioOutTaskHandle = nullptr;
+QueueHandle_t g_commandQueue = nullptr;
+TaskHandle_t g_commandPullTaskHandle = nullptr;
 
 // ========================= 3) DATA MODELS =========================
 struct PulledCommand {
@@ -172,8 +289,17 @@ struct PulledCommand {
   String reminderId;
 };
 
+struct CommandMessage {
+  bool hasCommand = false;
+  char commandId[64];
+  char type[32];
+  char storyId[64];
+  char reminderId[64];
+};
+
 struct PlaybackResponse {
   bool ok = false;
+  bool interrupted = false;
   int httpCode = 0;
   bool completed = false;
   String mimeType;
@@ -182,6 +308,43 @@ struct PlaybackResponse {
   int segmentOrder = -1;
   int bytesLength = 0;
 };
+
+bool pullCommandFromServer(PulledCommand& outCmd);
+void executeCommand(const PulledCommand& cmd);
+PlaybackResponse getReminderExecuteAudio(const String& reminderId);
+void preemptForReminderPriority();
+bool isCurrentQaUtterance(const DynamicJsonDocument& doc);
+void drawRobotEyebrows(int leftX, int rightX, int eyeWidth, int eyeTopY, int browLift, int browTilt, bool isHappy);
+void drawRobotEyes(int offsetX, int offsetY, int height, bool isHappy, int browLift = 0, int browTilt = 2);
+void drawListeningEyes(uint8_t phase);
+void tickEyeAnimation();
+void tickFaceUi();
+void maybeTickFaceUi();
+void pumpUiAndControlDuringBlockingWork();
+void initSpiffsStorage();
+bool playWavPromptFromSpiffs(const char* path, bool allowAbort);
+void playCantConnectWifiPrompt();
+bool playNoSpeechPrompt();
+void playStartSuccessPrompt();
+bool shouldAbortCurrentOutput();
+void startQaInterrupt(const char* trigger);
+bool sendWsAudioStart();
+bool sendWsAudioEnd();
+void finishQaInterrupt(bool success, const char* reason);
+uint32_t estimateWavPromptDurationMs(const char* path);
+void waitWithWsPump(uint32_t waitMs);
+void restartQaListeningAfterNoSpeech(const char* reasonTag);
+bool isWsNoSpeechError();
+void initBootButtonToggle();
+void tickBootButtonToggle();
+void toggleStatsOverlay();
+void drawStatsOverlay(bool forceDraw);
+bool isBootButtonReleased();
+void tftFillScreen(uint16_t color);
+void tftFillRectXYWH(int x, int y, int w, int h, uint16_t color);
+void tftFillRoundRectCompat(int x, int y, int w, int h, int radius, uint16_t color);
+void tftDrawTextLine(int x, int y, const char* text, uint16_t color);
+void tftDrawMultilineText(int x, int y, const String& text, uint16_t color);
 
 // ========================= 4) HW INIT + UI =========================
 void setStatusLed(bool r, bool g, bool b) {
@@ -194,22 +357,333 @@ void setStatusColor(uint16_t color) {
   setStatusLed(color == ST77XX_RED, color == ST77XX_GREEN, color == ST77XX_BLUE);
 }
 
+void tftFillScreen(uint16_t color) {
+  g_tft.fillRectangle(0, 0, TFT_SCREEN_W - 1, TFT_SCREEN_H - 1, color);
+}
+
+void tftFillRectXYWH(int x, int y, int w, int h, uint16_t color) {
+  if (w <= 0 || h <= 0) {
+    return;
+  }
+
+  int x1 = x;
+  int y1 = y;
+  int x2 = x + w - 1;
+  int y2 = y + h - 1;
+
+  if (x2 < 0 || y2 < 0 || x1 >= TFT_SCREEN_W || y1 >= TFT_SCREEN_H) {
+    return;
+  }
+
+  if (x1 < 0) x1 = 0;
+  if (y1 < 0) y1 = 0;
+  if (x2 >= TFT_SCREEN_W) x2 = TFT_SCREEN_W - 1;
+  if (y2 >= TFT_SCREEN_H) y2 = TFT_SCREEN_H - 1;
+  g_tft.fillRectangle((uint16_t)x1, (uint16_t)y1, (uint16_t)x2, (uint16_t)y2, color);
+}
+
+void tftFillRoundRectCompat(int x, int y, int w, int h, int radius, uint16_t color) {
+  if (w <= 0 || h <= 0) {
+    return;
+  }
+
+  int r = radius;
+  if (r < 0) {
+    r = 0;
+  }
+  if (r > (w / 2)) {
+    r = w / 2;
+  }
+  if (r > (h / 2)) {
+    r = h / 2;
+  }
+
+  if (r == 0) {
+    tftFillRectXYWH(x, y, w, h, color);
+    return;
+  }
+
+  tftFillRectXYWH(x + r, y, w - (2 * r), h, color);
+  tftFillRectXYWH(x, y + r, r, h - (2 * r), color);
+  tftFillRectXYWH(x + w - r, y + r, r, h - (2 * r), color);
+
+  g_tft.fillCircle((uint8_t)(x + r), (uint8_t)(y + r), (uint8_t)r, color);
+  g_tft.fillCircle((uint8_t)(x + w - r - 1), (uint8_t)(y + r), (uint8_t)r, color);
+  g_tft.fillCircle((uint8_t)(x + r), (uint8_t)(y + h - r - 1), (uint8_t)r, color);
+  g_tft.fillCircle((uint8_t)(x + w - r - 1), (uint8_t)(y + h - r - 1), (uint8_t)r, color);
+}
+
+void tftDrawTextLine(int x, int y, const char* text, uint16_t color) {
+  if (text == nullptr || text[0] == '\0') {
+    return;
+  }
+  g_tft.drawText((uint16_t)x, (uint16_t)y, String(text), color);
+}
+
+void tftDrawMultilineText(int x, int y, const String& text, uint16_t color) {
+  int maxChars = (TFT_SCREEN_W - x) / 11;
+  if (maxChars < 1) {
+    maxChars = 1;
+  }
+
+  char line[40];
+  int lineLen = 0;
+  int cursorY = y;
+
+  for (size_t i = 0; i < text.length(); ++i) {
+    char c = text.charAt((unsigned int)i);
+    bool forceFlush = false;
+    if (c == '\r') {
+      continue;
+    }
+    if (c == '\n') {
+      forceFlush = true;
+    } else {
+      if (lineLen < (int)sizeof(line) - 1) {
+        line[lineLen++] = c;
+      }
+      if (lineLen >= maxChars) {
+        forceFlush = true;
+      }
+    }
+
+    if (forceFlush) {
+      line[lineLen] = '\0';
+      tftDrawTextLine(x, cursorY, line, color);
+      cursorY += TFT_FONT_LINE_H;
+      lineLen = 0;
+      if (cursorY > (TFT_SCREEN_H - TFT_FONT_H)) {
+        return;
+      }
+    }
+  }
+
+  if (lineLen > 0 && cursorY <= (TFT_SCREEN_H - TFT_FONT_H)) {
+    line[lineLen] = '\0';
+    tftDrawTextLine(x, cursorY, line, color);
+  }
+}
+
 void showTextOnTft(const String& message, uint16_t color = ST77XX_WHITE) {
+  if (!g_tftReady || !g_textUiEnabled) {
+    return;
+  }
+
+  g_eyeAnimActive = false;
+  g_lastUiTextMs = millis();
+  tftFillScreen(ST77XX_BLACK);
+  tftDrawMultilineText(2, 24, message, color);
+}
+
+void showWifiStatusOnTft(const String& message, uint16_t color = ST77XX_WHITE) {
+  if (!g_tftReady || !g_wifiUiEnabled) {
+    return;
+  }
+
+  tftFillScreen(ST77XX_BLACK);
+  tftDrawMultilineText(2, 24, message, color);
+}
+
+void onFirstWifiConnected() {
+  if (g_hasEverWifiConnected) {
+    return;
+  }
+
+  g_hasEverWifiConnected = true;
+  g_wifiUiEnabled = false;
+  g_textUiEnabled = false;
+  g_eyeAnimActive = false;
+  g_listeningFaceShown = false;
+  g_neutralFaceShown = false;
+  const unsigned long now = millis();
+  g_lastUiTextMs = (now > EYE_TEXT_HOLD_MS) ? (now - EYE_TEXT_HOLD_MS) : 0;
+  if (g_tftReady) {
+    tftFillScreen(EYE_BG_COLOR);
+  }
+}
+
+void drawRobotEyebrows(int leftX, int rightX, int eyeWidth, int eyeTopY, int browLift, int browTilt, bool isHappy) {
+  int lift = browLift;
+  int tilt = browTilt;
+  if (lift < -4) {
+    lift = -4;
+  } else if (lift > 8) {
+    lift = 8;
+  }
+  if (tilt < -8) {
+    tilt = -8;
+  } else if (tilt > 8) {
+    tilt = 8;
+  }
+  if (isHappy && tilt > 0) {
+    tilt = 0;
+  }
+
+  const int browBaseY = eyeTopY - 18 - lift;
+  const int browXPad = 5;
+  const int browWidth = eyeWidth - 10;
+  const int browThickness = 4;
+  const int leftBrowX = leftX + browXPad;
+  const int rightBrowX = rightX + browXPad;
+
+  for (int i = 0; i < browThickness; i++) {
+    g_tft.drawLine(leftBrowX, browBaseY + i, leftBrowX + browWidth, browBaseY + i + tilt, EYE_COLOR);
+    g_tft.drawLine(rightBrowX, browBaseY + i + tilt, rightBrowX + browWidth, browBaseY + i, EYE_COLOR);
+  }
+}
+
+void drawRobotEyes(int offsetX, int offsetY, int height, bool isHappy, int browLift, int browTilt) {
   if (!g_tftReady) {
     return;
   }
 
-  g_tft.fillScreen(ST77XX_BLACK);
-  g_tft.setCursor(0, 30);
-  g_tft.setTextColor(color);
-  g_tft.setTextWrap(true);
-  g_tft.println(message);
+  if (height < 6) {
+    height = 6;
+  } else if (height > EYE_MAX_HEIGHT) {
+    height = EYE_MAX_HEIGHT;
+  }
+
+  const int eyeWidth = EYE_WIDTH;
+  const int normalHeight = EYE_NORMAL_HEIGHT;
+  const int leftX = EYE_LEFT_X_BASE + offsetX;
+  const int rightX = EYE_RIGHT_X_BASE + offsetX;
+  const int y = EYE_BASE_Y + offsetY + (normalHeight - height) / 2;
+
+  // Clear full eye band to avoid residual pixels on left/right edges.
+  tftFillRectXYWH(0, 12, TFT_SCREEN_W, 132, EYE_BG_COLOR);
+
+  tftFillRoundRectCompat(leftX, y, eyeWidth, height, EYE_CORNER_RADIUS, EYE_COLOR);
+  tftFillRoundRectCompat(rightX, y, eyeWidth, height, EYE_CORNER_RADIUS, EYE_COLOR);
+
+  if (isHappy) {
+    g_tft.fillCircle((uint8_t)(leftX + (eyeWidth / 2)), (uint8_t)(y + height), 28, EYE_BG_COLOR);
+    g_tft.fillCircle((uint8_t)(rightX + (eyeWidth / 2)), (uint8_t)(y + height), 28, EYE_BG_COLOR);
+  }
+
+  drawRobotEyebrows(leftX, rightX, eyeWidth, y, browLift, browTilt, isHappy);
+}
+
+void drawListeningEyes(uint8_t phase) {
+  const int lift = (phase == 1) ? 3 : 2;
+  const int tilt = (phase == 2) ? 5 : 4;
+  drawRobotEyes(0, 0, 68, false, lift, tilt);
+}
+
+void tickEyeAnimation() {
+  if (!g_tftReady) {
+    return;
+  }
+
+  if (g_state == STATE_INTERRUPT_QA) {
+    g_eyeAnimActive = false;
+    return;
+  }
+
+  const unsigned long now = millis();
+  if ((now - g_lastUiTextMs) < EYE_TEXT_HOLD_MS) {
+    return;
+  }
+
+  if (!g_eyeAnimActive) {
+    g_eyeAnimActive = true;
+    g_eyeFrameIndex = 0;
+    g_eyeFrameStartMs = now;
+    const EyeFrame& frame = kIdleEyeFrames[g_eyeFrameIndex];
+    drawRobotEyes(frame.offsetX, frame.offsetY, frame.height, frame.isHappy, frame.browLift, frame.browTilt);
+    return;
+  }
+
+  const EyeFrame& frame = kIdleEyeFrames[g_eyeFrameIndex];
+  if ((now - g_eyeFrameStartMs) < frame.holdMs) {
+    return;
+  }
+
+  g_eyeFrameIndex++;
+  if (g_eyeFrameIndex >= (sizeof(kIdleEyeFrames) / sizeof(kIdleEyeFrames[0]))) {
+    g_eyeFrameIndex = 0;
+  }
+  g_eyeFrameStartMs = now;
+
+  const EyeFrame& nextFrame = kIdleEyeFrames[g_eyeFrameIndex];
+  drawRobotEyes(nextFrame.offsetX, nextFrame.offsetY, nextFrame.height, nextFrame.isHappy, nextFrame.browLift, nextFrame.browTilt);
+}
+
+void tickFaceUi() {
+  if (!g_tftReady) {
+    return;
+  }
+
+  if (g_statsOverlayEnabled) {
+    drawStatsOverlay(false);
+    return;
+  }
+
+  if (!g_hasEverWifiConnected) {
+    return;
+  }
+
+  if (g_state == STATE_INTERRUPT_QA && g_qaStep == QA_STEP_STREAM_MIC) {
+    const unsigned long now = millis();
+    if (!g_listeningFaceShown || (now - g_listeningFaceLastMs) >= 220) {
+      g_eyeAnimActive = false;
+      drawListeningEyes(g_listeningBrowPhase);
+      g_listeningFaceShown = true;
+      g_neutralFaceShown = false;
+      g_listeningFaceLastMs = now;
+      g_listeningBrowPhase = (g_listeningBrowPhase + 1) % 3;
+    }
+    return;
+  }
+
+  g_listeningFaceShown = false;
+
+  if (g_state == STATE_IDLE || g_state == STATE_STORY_PLAYING) {
+    g_neutralFaceShown = false;
+    tickEyeAnimation();
+    return;
+  }
+
+  if (!g_neutralFaceShown) {
+    g_eyeAnimActive = false;
+    drawRobotEyes(0, 0, 90, false, 0, 2);
+    g_neutralFaceShown = true;
+  }
+}
+
+void maybeTickFaceUi() {
+  if (!g_tftReady) {
+    return;
+  }
+
+  const unsigned long now = millis();
+  if (g_lastFaceUiRenderMs != 0 && (now - g_lastFaceUiRenderMs) < TFT_UI_FRAME_MIN_INTERVAL_MS) {
+    return;
+  }
+
+  if (g_statsOverlayEnabled) {
+    g_lastFaceUiRenderMs = now;
+    tickFaceUi();
+    return;
+  }
+
+  // On ILI9225, heavy redraw can starve I2S and cause speaker crackle / mic timeout.
+  if (TFT_THROTTLE_UI_FOR_AUDIO) {
+    if (g_state == STATE_STORY_PLAYING) {
+      return;
+    }
+    if (g_state == STATE_INTERRUPT_QA) {
+      return;
+    }
+  }
+
+  g_lastFaceUiRenderMs = now;
+  tickFaceUi();
 }
 
 void initI2S() {
   i2s_config_t txConfig = {};
   txConfig.mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX);
-  txConfig.sample_rate = AUDIO_SAMPLE_RATE;
+  txConfig.sample_rate = AUDIO_OUTPUT_SAMPLE_RATE;
   txConfig.bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT;
   txConfig.channel_format = I2S_CHANNEL_FMT_ONLY_LEFT;
   txConfig.communication_format = I2S_COMM_FORMAT_STAND_I2S;
@@ -278,15 +752,19 @@ void initHardware() {
 
   pinMode(TFT_BLK, OUTPUT);
   digitalWrite(TFT_BLK, HIGH);
-  SPI.begin(TFT_SCK, -1, TFT_SDA);
-  g_tft.init(240, 240);
-  g_tft.setRotation(2);
-  g_tft.setTextSize(2);
-  g_tft.setTextColor(ST77XX_WHITE);
+  SPI.begin(TFT_SCLK, -1, TFT_MOSI, TFT_CS);
+  g_tft.begin(SPI);
+  g_tft.setOrientation(3);
+  g_tft.setBacklight(true);
+  g_tft.setBackgroundColor(COLOR_BLACK);
+  g_tft.setFont(Terminal11x16);
+  tftFillScreen(ST77XX_BLACK);
   g_tftReady = true;
-  showTextOnTft("Robot booting...");
 
+  initBootButtonToggle();
   initI2S();
+  initAudioOutputPipeline();
+  initSpiffsStorage();
 }
 
 // ========================= 5) UTIL HELPERS =========================
@@ -327,6 +805,567 @@ void consumeBody(HTTPClient& http) {
   }
   while (http.connected() && (stream->available() > 0)) {
     stream->read();
+  }
+}
+
+void pumpUiAndControlDuringBlockingWork() {
+  tickBootButtonToggle();
+  if (g_wsInitialized) {
+    g_ws.loop();
+  }
+
+  while (Serial.available() > 0) {
+    char c = (char)Serial.read();
+    if (c == 'q' || c == 'Q') {
+      startQaInterrupt("serial");
+    } else if (c == 'b' || c == 'B') {
+      toggleStatsOverlay();
+    }
+  }
+
+  maybeTickFaceUi();
+}
+
+// ========================= 5.1) AUDIO OUTPUT PIPELINE =========================
+void audioOutTask(void* pvParameters) {
+  (void)pvParameters;
+  AudioOutChunk chunk;
+
+  for (;;) {
+    if (xQueueReceive(g_audioOutQueue, &chunk, portMAX_DELAY) != pdTRUE) {
+      continue;
+    }
+
+    if (!g_i2sTxReady || chunk.len == 0) {
+      continue;
+    }
+
+    if (AUDIO_OUTPUT_GAIN > 1.001f && chunk.len >= 2) {
+      for (size_t i = 0; i + 1 < chunk.len; i += 2) {
+        int16_t sample = (int16_t)((uint16_t)chunk.data[i] | ((uint16_t)chunk.data[i + 1] << 8));
+        int32_t boosted = (int32_t)((float)sample * AUDIO_OUTPUT_GAIN);
+        if (boosted > 32767) {
+          boosted = 32767;
+        } else if (boosted < -32768) {
+          boosted = -32768;
+        }
+        uint16_t raw = (uint16_t)((int16_t)boosted);
+        chunk.data[i] = (uint8_t)(raw & 0xFF);
+        chunk.data[i + 1] = (uint8_t)((raw >> 8) & 0xFF);
+      }
+    }
+
+    size_t written = 0;
+    i2s_write(I2S_NUM_0, chunk.data, chunk.len, &written, portMAX_DELAY);
+  }
+}
+
+void initAudioOutputPipeline() {
+  if (g_audioOutQueue != nullptr) {
+    return;
+  }
+
+  g_audioOutQueue = xQueueCreate(AUDIO_OUT_QUEUE_DEPTH, sizeof(AudioOutChunk));
+  if (g_audioOutQueue == nullptr) {
+    Serial.println("[AUDIO] queue create failed");
+    return;
+  }
+
+  BaseType_t ok = xTaskCreatePinnedToCore(
+      audioOutTask,
+      "audio_out",
+      4096,
+      nullptr,
+      1,
+      &g_audioOutTaskHandle,
+      1);
+
+  if (ok != pdPASS) {
+    Serial.println("[AUDIO] task create failed");
+    g_audioOutTaskHandle = nullptr;
+    vQueueDelete(g_audioOutQueue);
+    g_audioOutQueue = nullptr;
+    return;
+  }
+
+  Serial.printf("[AUDIO] queue ready depth=%u chunk=%u\n",
+                (unsigned)AUDIO_OUT_QUEUE_DEPTH,
+                (unsigned)AUDIO_OUT_CHUNK_BYTES);
+}
+
+void flushAudioOutputNow() {
+  if (g_audioOutQueue != nullptr) {
+    xQueueReset(g_audioOutQueue);
+  }
+  if (g_i2sTxReady) {
+    i2s_zero_dma_buffer(I2S_NUM_0);
+  }
+}
+
+bool enqueueAudioBytes(const uint8_t* data, size_t bytesLen, uint32_t waitMs = AUDIO_OUT_ENQUEUE_TIMEOUT_MS) {
+  if (data == nullptr || bytesLen == 0) {
+    return true;
+  }
+
+  if (g_audioOutQueue == nullptr) {
+    return false;
+  }
+
+  size_t offset = 0;
+  TickType_t waitTicks = pdMS_TO_TICKS(waitMs);
+  while (offset < bytesLen) {
+    AudioOutChunk chunk;
+    size_t n = bytesLen - offset;
+    if (n > AUDIO_OUT_CHUNK_BYTES) {
+      n = AUDIO_OUT_CHUNK_BYTES;
+    }
+
+    chunk.len = (uint16_t)n;
+    memcpy(chunk.data, data + offset, n);
+
+    if (xQueueSend(g_audioOutQueue, &chunk, waitTicks) != pdTRUE) {
+      return false;
+    }
+    offset += n;
+  }
+
+  return true;
+}
+
+void initSpiffsStorage() {
+  if (g_spiffsReady) {
+    return;
+  }
+  g_spiffsReady = SPIFFS.begin(true);
+  if (!g_spiffsReady) {
+    Serial.println("[SPIFFS] mount failed");
+    return;
+  }
+
+  Serial.println("[SPIFFS] mounted");
+  Serial.printf("[SPIFFS] prompts: wifi=%d no_speech=%d start=%d\n",
+                SPIFFS.exists(AUDIO_PROMPT_CANT_CONNECT_WIFI) ? 1 : 0,
+                SPIFFS.exists(AUDIO_PROMPT_NO_SPEECH) ? 1 : 0,
+                SPIFFS.exists(AUDIO_PROMPT_START_SUCCESS) ? 1 : 0);
+}
+
+bool playWavPromptFromSpiffs(const char* path, bool allowAbort) {
+  if (!g_spiffsReady || path == nullptr || path[0] == '\0') {
+    return false;
+  }
+  if (g_audioOutQueue == nullptr || !g_i2sTxReady) {
+    return false;
+  }
+
+  File file = SPIFFS.open(path, FILE_READ);
+  if (!file) {
+    Serial.printf("[AUDIO] prompt missing: %s\n", path);
+    return false;
+  }
+
+  uint8_t buf[512];
+  int skipHeader = QA_WAV_HEADER_BYTES;
+  size_t totalQueued = 0;
+  bool enqueueFailed = false;
+
+  while (file.available()) {
+    if (allowAbort && shouldAbortCurrentOutput()) {
+      break;
+    }
+    pumpUiAndControlDuringBlockingWork();
+
+    int n = file.read(buf, sizeof(buf));
+    if (n <= 0) {
+      break;
+    }
+
+    int offset = 0;
+    if (skipHeader > 0) {
+      int drop = n > skipHeader ? skipHeader : n;
+      skipHeader -= drop;
+      offset = drop;
+    }
+
+    int audioBytes = n - offset;
+    if (audioBytes > 0) {
+      if (!enqueueAudioBytes(buf + offset, (size_t)audioBytes, AUDIO_PROMPT_ENQUEUE_TIMEOUT_MS)) {
+        enqueueFailed = true;
+        break;
+      }
+      totalQueued += (size_t)audioBytes;
+    }
+  }
+
+  file.close();
+  if (enqueueFailed) {
+    Serial.printf("[AUDIO] prompt enqueue failed: %s\n", path);
+    return false;
+  }
+  if (allowAbort && shouldAbortCurrentOutput()) {
+    return false;
+  }
+  Serial.printf("[AUDIO] prompt queued: %s bytes=%u\n", path, (unsigned)totalQueued);
+  return totalQueued > 0;
+}
+
+void playCantConnectWifiPrompt() {
+  unsigned long now = millis();
+  if (g_lastWifiFailPromptMs != 0 && (now - g_lastWifiFailPromptMs) < WIFI_FAIL_PROMPT_COOLDOWN_MS) {
+    return;
+  }
+  g_lastWifiFailPromptMs = now;
+  flushAudioOutputNow();
+  playWavPromptFromSpiffs(AUDIO_PROMPT_CANT_CONNECT_WIFI, false);
+}
+
+bool playNoSpeechPrompt() {
+  return playWavPromptFromSpiffs(AUDIO_PROMPT_NO_SPEECH, false);
+}
+
+void playStartSuccessPrompt() {
+  flushAudioOutputNow();
+  playWavPromptFromSpiffs(AUDIO_PROMPT_START_SUCCESS, false);
+}
+
+void initBootButtonToggle() {
+  if (!BOOT_BUTTON_TOGGLE_ENABLED) {
+    g_bootButtonEnabled = false;
+    Serial.println("[BTN] BOOT button toggle disabled by config (use Serial 'B')");
+    return;
+  }
+
+  if (BOOT_BUTTON_PIN == TFT_LED) {
+    g_bootButtonEnabled = false;
+    Serial.println("[BTN] BOOT button toggle disabled (pin conflict with TFT_LED)");
+    return;
+  }
+
+  pinMode(BOOT_BUTTON_PIN, INPUT_PULLUP);
+  bool released = isBootButtonReleased();
+  g_bootButtonRawReleased = released;
+  g_bootButtonStableReleased = released;
+  g_bootButtonLastChangeMs = millis();
+}
+
+void drawStatsOverlay(bool forceDraw) {
+  if (!g_tftReady || !g_statsOverlayEnabled) {
+    return;
+  }
+
+  unsigned long now = millis();
+  if (!forceDraw && g_statsLastDrawMs != 0 && (now - g_statsLastDrawMs) < STATS_REFRESH_MS) {
+    return;
+  }
+  g_statsLastDrawMs = now;
+
+  uint32_t cpuMhz = (uint32_t)ESP.getCpuFreqMHz();
+  uint32_t heapTotalKb = (uint32_t)(ESP.getHeapSize() / 1024U);
+  uint32_t heapFreeKb = (uint32_t)(ESP.getFreeHeap() / 1024U);
+  uint32_t heapUsedKb = heapTotalKb > heapFreeKb ? (heapTotalKb - heapFreeKb) : 0;
+  uint32_t heapPct = heapTotalKb == 0 ? 0 : (heapUsedKb * 100U) / heapTotalKb;
+
+  uint32_t psTotalKb = (uint32_t)(ESP.getPsramSize() / 1024U);
+  uint32_t psFreeKb = (uint32_t)(ESP.getFreePsram() / 1024U);
+  uint32_t psUsedKb = psTotalKb > psFreeKb ? (psTotalKb - psFreeKb) : 0;
+  uint32_t psPct = psTotalKb == 0 ? 0 : (psUsedKb * 100U) / psTotalKb;
+
+  uint32_t diskTotalKb = 0;
+  uint32_t diskUsedKb = 0;
+  uint32_t diskPct = 0;
+  if (g_spiffsReady) {
+    diskTotalKb = (uint32_t)(SPIFFS.totalBytes() / 1024U);
+    diskUsedKb = (uint32_t)(SPIFFS.usedBytes() / 1024U);
+    diskPct = diskTotalKb == 0 ? 0 : (diskUsedKb * 100U) / diskTotalKb;
+  }
+
+  uint32_t uptimeSec = now / 1000U;
+  uint32_t hh = uptimeSec / 3600U;
+  uint32_t mm = (uptimeSec % 3600U) / 60U;
+  uint32_t ss = uptimeSec % 60U;
+
+  tftFillScreen(ST77XX_BLACK);
+
+  char line[64];
+  int y = 0;
+
+  snprintf(line, sizeof(line), "STATS (Serial B)");
+  tftDrawTextLine(0, y, line, ST77XX_GREEN);
+  y += TFT_FONT_LINE_H;
+
+  snprintf(line, sizeof(line), "CPU %lu MHz", (unsigned long)cpuMhz);
+  tftDrawTextLine(0, y, line, ST77XX_GREEN);
+  y += TFT_FONT_LINE_H;
+
+  snprintf(line, sizeof(line), "RAM %lu/%luKB %lu%%",
+           (unsigned long)heapUsedKb,
+           (unsigned long)heapTotalKb,
+           (unsigned long)heapPct);
+  tftDrawTextLine(0, y, line, ST77XX_GREEN);
+  y += TFT_FONT_LINE_H;
+
+  if (psTotalKb > 0) {
+    snprintf(line, sizeof(line), "PSRAM %lu/%luKB %lu%%",
+             (unsigned long)psUsedKb,
+             (unsigned long)psTotalKb,
+             (unsigned long)psPct);
+  } else {
+    snprintf(line, sizeof(line), "PSRAM N/A");
+  }
+  tftDrawTextLine(0, y, line, ST77XX_GREEN);
+  y += TFT_FONT_LINE_H;
+
+  if (g_spiffsReady) {
+    snprintf(line, sizeof(line), "DISK %lu/%luKB %lu%%",
+             (unsigned long)diskUsedKb,
+             (unsigned long)diskTotalKb,
+             (unsigned long)diskPct);
+  } else {
+    snprintf(line, sizeof(line), "DISK SPIFFS N/A");
+  }
+  tftDrawTextLine(0, y, line, ST77XX_GREEN);
+  y += TFT_FONT_LINE_H;
+
+  snprintf(line, sizeof(line), "UP %02lu:%02lu:%02lu",
+           (unsigned long)hh,
+           (unsigned long)mm,
+           (unsigned long)ss);
+  tftDrawTextLine(0, y, line, ST77XX_GREEN);
+  y += TFT_FONT_LINE_H;
+
+  snprintf(line, sizeof(line), "STATE=%d QA=%d",
+           (int)g_state,
+           (int)g_qaStep);
+  tftDrawTextLine(0, y, line, ST77XX_GREEN);
+  y += TFT_FONT_LINE_H;
+
+  snprintf(line, sizeof(line), "WIFI %s", WiFi.status() == WL_CONNECTED ? "OK" : "DOWN");
+  tftDrawTextLine(0, y, line, ST77XX_GREEN);
+}
+
+void toggleStatsOverlay() {
+  g_statsOverlayEnabled = !g_statsOverlayEnabled;
+  g_statsLastDrawMs = 0;
+
+  if (g_statsOverlayEnabled) {
+    g_eyeAnimActive = false;
+    g_neutralFaceShown = false;
+    g_listeningFaceShown = false;
+    drawStatsOverlay(true);
+    Serial.println("[UI] Stats overlay ON");
+    return;
+  }
+
+  if (g_tftReady) {
+    tftFillScreen(EYE_BG_COLOR);
+  }
+  g_eyeAnimActive = false;
+  g_neutralFaceShown = false;
+  g_listeningFaceShown = false;
+  Serial.println("[UI] Stats overlay OFF");
+}
+
+void tickBootButtonToggle() {
+  if (!g_bootButtonEnabled) {
+    return;
+  }
+
+  bool rawReleased = isBootButtonReleased();
+  unsigned long now = millis();
+
+  if (rawReleased != g_bootButtonRawReleased) {
+    g_bootButtonRawReleased = rawReleased;
+    g_bootButtonLastChangeMs = now;
+  }
+
+  if ((now - g_bootButtonLastChangeMs) < BOOT_BUTTON_DEBOUNCE_MS) {
+    return;
+  }
+
+  if (g_bootButtonStableReleased != g_bootButtonRawReleased) {
+    bool wasReleased = g_bootButtonStableReleased;
+    g_bootButtonStableReleased = g_bootButtonRawReleased;
+    if (!wasReleased && g_bootButtonStableReleased) {
+      toggleStatsOverlay();
+    }
+  }
+}
+
+bool isBootButtonReleased() {
+  if (!g_bootButtonEnabled) {
+    return true;
+  }
+
+  int level = digitalRead(BOOT_BUTTON_PIN);
+  if (BOOT_BUTTON_ACTIVE_LOW) {
+    return level == HIGH;
+  }
+  return level == LOW;
+}
+
+uint32_t estimateWavPromptDurationMs(const char* path) {
+  if (!g_spiffsReady || path == nullptr || path[0] == '\0') {
+    return 0;
+  }
+
+  File file = SPIFFS.open(path, FILE_READ);
+  if (!file) {
+    return 0;
+  }
+
+  size_t bytes = file.size();
+  file.close();
+  if (bytes <= (size_t)QA_WAV_HEADER_BYTES) {
+    return 0;
+  }
+
+  size_t pcmBytes = bytes - (size_t)QA_WAV_HEADER_BYTES;
+  uint32_t bytesPerSec = (uint32_t)AUDIO_SAMPLE_RATE * 2U; // mono 16-bit PCM
+  if (bytesPerSec == 0) {
+    return 0;
+  }
+  return (uint32_t)(((uint64_t)pcmBytes * 1000ULL) / bytesPerSec);
+}
+
+void waitWithWsPump(uint32_t waitMs) {
+  unsigned long start = millis();
+  while ((millis() - start) < waitMs) {
+    pumpUiAndControlDuringBlockingWork();
+    delay(10);
+  }
+}
+
+void restartQaListeningAfterNoSpeech(const char* reasonTag) {
+  sendWsAudioEnd();
+  flushAudioOutputNow();
+
+  bool promptPlayed = playNoSpeechPrompt();
+  uint32_t promptMs = promptPlayed ? estimateWavPromptDurationMs(AUDIO_PROMPT_NO_SPEECH) : 0;
+  if (promptMs < 250) {
+    promptMs = 250;
+  }
+  waitWithWsPump(promptMs + 120);
+
+  if (g_stopRequested) {
+    finishQaInterrupt(false, "qa_stop_requested");
+    return;
+  }
+
+  const char* finishReason = reasonTag == nullptr ? "qa_no_speech_prompted" : reasonTag;
+  Serial.printf("[QA] Prompted no-speech then finish: %s\n", finishReason);
+  finishQaInterrupt(true, finishReason);
+}
+
+bool isWsNoSpeechError() {
+  String code = g_wsErrorCode;
+  String message = g_wsErrorMessage;
+  code.toLowerCase();
+  message.toLowerCase();
+
+  if (code == "no_audio") {
+    return true;
+  }
+  if (code == "pipeline_error") {
+    if (message.indexOf("empty transcript") >= 0) {
+      return true;
+    }
+    if (message.indexOf("no speech") >= 0) {
+      return true;
+    }
+    if (message.indexOf("blank audio") >= 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void copyStringToBuf(char* dst, size_t dstSize, const String& src) {
+  if (dst == nullptr || dstSize == 0) {
+    return;
+  }
+  size_t n = src.length();
+  if (n >= dstSize) {
+    n = dstSize - 1;
+  }
+  memcpy(dst, src.c_str(), n);
+  dst[n] = '\0';
+}
+
+void commandPullTask(void* pvParameters) {
+  (void)pvParameters;
+  for (;;) {
+    if (WiFi.status() == WL_CONNECTED) {
+      PulledCommand pulled;
+      bool ok = pullCommandFromServer(pulled);
+      if (ok && pulled.hasCommand && g_commandQueue != nullptr) {
+        CommandMessage msg = {};
+        msg.hasCommand = true;
+        copyStringToBuf(msg.commandId, sizeof(msg.commandId), pulled.commandId);
+        copyStringToBuf(msg.type, sizeof(msg.type), pulled.type);
+        copyStringToBuf(msg.storyId, sizeof(msg.storyId), pulled.storyId);
+        copyStringToBuf(msg.reminderId, sizeof(msg.reminderId), pulled.reminderId);
+
+        if (pulled.type == "STOP_STORY" || pulled.type == "REMINDER_CREATE") {
+          g_stopRequested = true;
+          flushAudioOutputNow();
+          xQueueReset(g_commandQueue);
+        }
+
+        if (xQueueSend(g_commandQueue, &msg, 0) != pdTRUE) {
+          CommandMessage dropped;
+          xQueueReceive(g_commandQueue, &dropped, 0);
+          xQueueSend(g_commandQueue, &msg, 0);
+        }
+      }
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(COMMAND_PULL_INTERVAL_MS));
+  }
+}
+
+void initCommandPullWorker() {
+  if (g_commandQueue != nullptr) {
+    return;
+  }
+
+  g_commandQueue = xQueueCreate(COMMAND_QUEUE_DEPTH, sizeof(CommandMessage));
+  if (g_commandQueue == nullptr) {
+    Serial.println("[CMD] queue create failed");
+    return;
+  }
+
+  BaseType_t ok = xTaskCreatePinnedToCore(
+      commandPullTask,
+      "cmd_pull",
+      6144,
+      nullptr,
+      1,
+      &g_commandPullTaskHandle,
+      0);
+  if (ok != pdPASS) {
+    Serial.println("[CMD] pull task create failed");
+    vQueueDelete(g_commandQueue);
+    g_commandQueue = nullptr;
+    g_commandPullTaskHandle = nullptr;
+    return;
+  }
+
+  Serial.printf("[CMD] pull task ready intervalMs=%lu\n", (unsigned long)COMMAND_PULL_INTERVAL_MS);
+}
+
+void processPendingCommands() {
+  if (g_commandQueue == nullptr) {
+    return;
+  }
+
+  CommandMessage msg;
+  while (xQueueReceive(g_commandQueue, &msg, 0) == pdTRUE) {
+    PulledCommand cmd;
+    cmd.hasCommand = msg.hasCommand;
+    cmd.commandId = String(msg.commandId);
+    cmd.type = String(msg.type);
+    cmd.storyId = String(msg.storyId);
+    cmd.reminderId = String(msg.reminderId);
+    executeCommand(cmd);
   }
 }
 
@@ -375,7 +1414,8 @@ bool ensureWifiConnected() {
       g_wifiWasConnected = true;
       Serial.printf("[WIFI] Connected. IP=%s\n", WiFi.localIP().toString().c_str());
       setStatusColor(ST77XX_GREEN);
-      showTextOnTft(String("WiFi OK\nIP: ") + WiFi.localIP().toString());
+      onFirstWifiConnected();
+      playStartSuccessPrompt();
     }
     return true;
   }
@@ -392,7 +1432,7 @@ bool ensureWifiConnected() {
   Serial.printf("[WIFI] Connect attempt #%u (prev=%s)\n", (unsigned)g_wifiRetryCount, wifiStatusText(before));
 
   setStatusColor(ST77XX_RED);
-  showTextOnTft("WiFi connecting...");
+  showWifiStatusOnTft("WiFi connecting...");
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
   WiFi.persistent(false);
@@ -412,7 +1452,8 @@ bool ensureWifiConnected() {
     g_wifiWasConnected = true;
     Serial.printf("[WIFI] Connected. IP=%s\n", WiFi.localIP().toString().c_str());
     setStatusColor(ST77XX_GREEN);
-    showTextOnTft(String("WiFi OK\nIP: ") + WiFi.localIP().toString());
+    onFirstWifiConnected();
+    playStartSuccessPrompt();
     return true;
   }
 
@@ -420,7 +1461,8 @@ bool ensureWifiConnected() {
   if ((g_wifiRetryCount % 3) == 0) {
     printWifiScanHint();
   }
-  showTextOnTft(String("WiFi retry\n") + wifiStatusText(after), ST77XX_RED);
+  showWifiStatusOnTft(String("WiFi retry\n") + wifiStatusText(after), ST77XX_RED);
+  playCantConnectWifiPrompt();
   return false;
 }
 
@@ -447,6 +1489,7 @@ void resetQaWsFlags() {
   g_wsLastTranscript = "";
   g_wsLastAssistantReply = "";
   g_wsSkipAudioHeaderBytes = 0;
+  g_wsTtsStartMs = 0;
   g_qaTtsWaitTimeoutMs = QA_WAIT_TTS_END_MS;
 }
 
@@ -455,7 +1498,7 @@ void resetQaCaptureState() {
   g_qaSpeechStartMs = 0;
   g_qaLastSpeechMs = 0;
   g_qaSpeechHitCount = 0;
-  g_qaNoiseEma = 900.0f;
+  g_qaNoiseEma = 300.0f;
   g_qaSentAudioBytes = 0;
   g_qaPreRollWriteIdx = 0;
   g_qaPreRollCount = 0;
@@ -464,27 +1507,53 @@ void resetQaCaptureState() {
   }
 }
 
-int qaFrameAvgAbsPcm16(const uint8_t* data, size_t bytesLen) {
+void analyzePcm16Frame(const uint8_t* data,
+                       size_t bytesLen,
+                       int& avgAbs,
+                       int& peakAbs,
+                       uint16_t& zcr,
+                       float& peakToAvg) {
+  avgAbs = 0;
+  peakAbs = 0;
+  zcr = 0;
+  peakToAvg = 0.0f;
+
   if (data == nullptr || bytesLen < 2) {
-    return 0;
+    return;
   }
+
   size_t sampleCount = bytesLen / 2;
   if (sampleCount == 0) {
-    return 0;
+    return;
   }
 
   uint64_t sum = 0;
+  int16_t prev = 0;
+  bool hasPrev = false;
+
   for (size_t i = 0; i < sampleCount; i++) {
     size_t idx = i * 2;
-    uint16_t raw = (uint16_t)data[idx] | ((uint16_t)data[idx + 1] << 8);
-    int32_t sample = (int16_t)raw;
-    if (sample < 0) {
-      sample = -sample;
+    int16_t sample = (int16_t)((uint16_t)data[idx] | ((uint16_t)data[idx + 1] << 8));
+    int32_t absSample = sample < 0 ? -sample : sample;
+    sum += (uint32_t)absSample;
+    if ((int)absSample > peakAbs) {
+      peakAbs = (int)absSample;
     }
-    sum += (uint32_t)sample;
+
+    if (hasPrev) {
+      bool signChanged = ((sample >= 0) != (prev >= 0));
+      if (signChanged) {
+        zcr++;
+      }
+    }
+    prev = sample;
+    hasPrev = true;
   }
 
-  return (int)(sum / sampleCount);
+  avgAbs = (int)(sum / sampleCount);
+  if (avgAbs > 0) {
+    peakToAvg = (float)peakAbs / (float)avgAbs;
+  }
 }
 
 int qaCurrentThresholdAbs() {
@@ -497,8 +1566,8 @@ int qaCurrentThresholdAbs() {
 
 void qaUpdateNoiseFloor(int frameAbs) {
   g_qaNoiseEma = (1.0f - QA_VAD_NOISE_EMA_ALPHA) * g_qaNoiseEma + QA_VAD_NOISE_EMA_ALPHA * (float)frameAbs;
-  if (g_qaNoiseEma < 100.0f) {
-    g_qaNoiseEma = 100.0f;
+  if (g_qaNoiseEma < 80.0f) {
+    g_qaNoiseEma = 80.0f;
   }
 }
 
@@ -538,13 +1607,22 @@ void qaFlushPreRollToWs() {
 }
 
 void resetAutoQaDetector() {
-  g_autoQaNoiseEma = 900.0f;
+  g_autoQaNoiseEma = 300.0f;
   g_autoQaSpeechHits = 0;
 }
 
 bool autoQaCanListenNow() {
   if (g_state == STATE_INTERRUPT_QA) {
-    return false;
+    if (!AUTO_QA_ALLOW_BARGE_IN_DURING_QA_TTS) {
+      return false;
+    }
+    if (g_qaStep != QA_STEP_WAIT_TTS_END) {
+      return false;
+    }
+    if (g_wsTtsStartMs > 0 && (millis() - g_wsTtsStartMs) < AUTO_QA_QA_TTS_GUARD_MS) {
+      return false;
+    }
+    return true;
   }
   if (g_state == STATE_STORY_PLAYING) {
     return true;
@@ -576,30 +1654,60 @@ void tickAutoQaTrigger() {
     return;
   }
 
-  int frameAbs = qaFrameAvgAbsPcm16(micBuf, readBytes);
+  int frameAbs = 0;
+  int peakAbs = 0;
+  uint16_t zcr = 0;
+  float peakToAvg = 0.0f;
+  analyzePcm16Frame(micBuf, readBytes, frameAbs, peakAbs, zcr, peakToAvg);
+
+  uint8_t requiredHits = AUTO_QA_HIT_FRAMES;
   float thresholdF = g_autoQaNoiseEma * AUTO_QA_THRESHOLD_MULTIPLIER;
   if (thresholdF < (float)AUTO_QA_MIN_ABS) {
     thresholdF = (float)AUTO_QA_MIN_ABS;
   }
+
+  if (g_state == STATE_INTERRUPT_QA && g_qaStep == QA_STEP_WAIT_TTS_END) {
+    float ttsThresholdF = g_autoQaNoiseEma * AUTO_QA_QA_TTS_THRESHOLD_MULTIPLIER;
+    if (ttsThresholdF < (float)AUTO_QA_QA_TTS_MIN_ABS) {
+      ttsThresholdF = (float)AUTO_QA_QA_TTS_MIN_ABS;
+    }
+    if (thresholdF < ttsThresholdF) {
+      thresholdF = ttsThresholdF;
+    }
+    requiredHits = AUTO_QA_QA_TTS_HIT_FRAMES;
+  }
+
   int threshold = (int)thresholdF;
   bool speechStrong = frameAbs >= threshold;
+  bool zcrOk = zcr >= AUTO_QA_MIN_ZCR && zcr <= AUTO_QA_MAX_ZCR;
+  bool peakShapeOk = peakToAvg > 0.0f && peakToAvg <= AUTO_QA_MAX_PEAK_TO_AVG;
+  bool speechCandidate = speechStrong && zcrOk && peakShapeOk;
 
-  if (!speechStrong) {
+  if (!speechCandidate) {
     g_autoQaNoiseEma = (1.0f - AUTO_QA_NOISE_EMA_ALPHA) * g_autoQaNoiseEma + AUTO_QA_NOISE_EMA_ALPHA * (float)frameAbs;
-    if (g_autoQaNoiseEma < 100.0f) {
-      g_autoQaNoiseEma = 100.0f;
+    if (g_autoQaNoiseEma < 80.0f) {
+      g_autoQaNoiseEma = 80.0f;
     }
     if (g_autoQaSpeechHits > 0) {
-      g_autoQaSpeechHits--;
+      if (frameAbs < (int)(threshold * 0.8f)) {
+        g_autoQaSpeechHits = 0;
+      } else {
+        g_autoQaSpeechHits--;
+      }
     }
   } else if (g_autoQaSpeechHits < 250) {
     g_autoQaSpeechHits++;
   }
 
-  if (g_autoQaSpeechHits >= AUTO_QA_HIT_FRAMES) {
-    Serial.printf("[AUTO_QA] Voice trigger abs=%d threshold=%d state=%d\n", frameAbs, threshold, (int)g_state);
+  if (g_autoQaSpeechHits >= requiredHits) {
+    Serial.printf("[AUTO_QA] Voice trigger abs=%d zcr=%u ratio=%.2f threshold=%d state=%d\n",
+                  frameAbs, (unsigned)zcr, peakToAvg, threshold, (int)g_state);
     resetAutoQaDetector();
-    startQaInterrupt("vad_auto");
+    if (g_state == STATE_INTERRUPT_QA) {
+      startQaInterrupt("vad_barge_in");
+    } else {
+      startQaInterrupt("vad_auto");
+    }
   }
 }
 
@@ -612,12 +1720,16 @@ void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
 
   if (type == WStype_DISCONNECTED) {
     g_wsConnected = false;
+    g_wsActiveOutputUtteranceId = "";
     Serial.println("[WS] Disconnected");
     return;
   }
 
   if (type == WStype_BIN) {
     if (!g_i2sTxReady || length == 0) {
+      return;
+    }
+    if (g_state != STATE_INTERRUPT_QA || g_qaStep != QA_STEP_WAIT_TTS_END || g_wsDropBinaryAudio) {
       return;
     }
 
@@ -629,8 +1741,9 @@ void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
     }
 
     if (offset < length) {
-      size_t written = 0;
-      i2s_write(I2S_NUM_0, payload + offset, length - offset, &written, portMAX_DELAY);
+      if (!enqueueAudioBytes(payload + offset, length - offset)) {
+        Serial.println("[AUDIO] ws enqueue failed");
+      }
     }
     return;
   }
@@ -670,27 +1783,65 @@ void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
     return;
   }
 
+  if (typeText == "OUTPUT_CANCELLED") {
+    String cancelledUtterance = doc["cancelledUtteranceId"].isNull()
+                                  ? (doc["utteranceId"].isNull() ? "" : doc["utteranceId"].as<String>())
+                                  : doc["cancelledUtteranceId"].as<String>();
+    if (cancelledUtterance.length() > 0) {
+      Serial.printf("[WS] OUTPUT_CANCELLED utterance=%s\n", cancelledUtterance.c_str());
+      if (cancelledUtterance == g_wsActiveOutputUtteranceId) {
+        g_wsActiveOutputUtteranceId = "";
+        g_wsTtsStartMs = 0;
+      }
+    } else {
+      Serial.println("[WS] OUTPUT_CANCELLED");
+      g_wsActiveOutputUtteranceId = "";
+      g_wsTtsStartMs = 0;
+    }
+    return;
+  }
+
   if (typeText == "TRANSCRIPT") {
+    if (!isCurrentQaUtterance(doc)) {
+      Serial.println("[WS] Ignore TRANSCRIPT from old utterance");
+      return;
+    }
     g_wsLastTranscript = doc["text"].isNull() ? "" : doc["text"].as<String>();
     Serial.printf("[WS] TRANSCRIPT: %s\n", g_wsLastTranscript.c_str());
     return;
   }
 
   if (typeText == "ASSISTANT_REPLY") {
+    if (!isCurrentQaUtterance(doc)) {
+      Serial.println("[WS] Ignore ASSISTANT_REPLY from old utterance");
+      return;
+    }
     g_wsLastAssistantReply = doc["text"].isNull() ? "" : doc["text"].as<String>();
     Serial.printf("[WS] ASSISTANT_REPLY: %s\n", g_wsLastAssistantReply.c_str());
-    showTextOnTft(String("QA Reply:\n") + g_wsLastAssistantReply, ST77XX_WHITE);
+    // Screen uses expression-only UI, no QA text rendering.
     return;
   }
 
   if (typeText == "TTS_START") {
+    if (!isCurrentQaUtterance(doc)) {
+      Serial.println("[WS] Ignore TTS_START from old utterance");
+      return;
+    }
+    if (g_qaStep != QA_STEP_WAIT_TTS_END) {
+      Serial.println("[WS] Ignore TTS_START outside WAIT_TTS_END");
+      return;
+    }
+    String utterance = doc["utteranceId"].isNull() ? "" : doc["utteranceId"].as<String>();
+    if (utterance.length() > 0) {
+      g_wsActiveOutputUtteranceId = utterance;
+    }
     String mimeType = doc["audioMimeType"].isNull() ? "" : doc["audioMimeType"].as<String>();
     int audioBytesLen = doc["audioBytesLength"].isNull() ? 0 : doc["audioBytesLength"].as<int>();
     int sampleRate = doc["sampleRate"].isNull() ? AUDIO_SAMPLE_RATE : doc["sampleRate"].as<int>();
     int channels = doc["channels"].isNull() ? 1 : doc["channels"].as<int>();
 
     if (mimeType.startsWith("audio/wav")) {
-      g_wsSkipAudioHeaderBytes = 44;
+      g_wsSkipAudioHeaderBytes = QA_WAV_HEADER_BYTES;
     } else {
       g_wsSkipAudioHeaderBytes = 0;
     }
@@ -711,6 +1862,9 @@ void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
     }
 
     g_wsTtsEnd = false;
+    g_wsDropBinaryAudio = false;
+    g_wsTtsStartMs = millis();
+    resetAutoQaDetector();
     Serial.printf("[WS] TTS_START mime=%s bytes=%d timeoutMs=%lu\n",
                   mimeType.c_str(),
                   audioBytesLen,
@@ -719,6 +1873,19 @@ void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
   }
 
   if (typeText == "TTS_END") {
+    if (!isCurrentQaUtterance(doc)) {
+      Serial.println("[WS] Ignore TTS_END from old utterance");
+      return;
+    }
+    if (g_qaStep != QA_STEP_WAIT_TTS_END) {
+      Serial.println("[WS] Ignore TTS_END outside WAIT_TTS_END");
+      return;
+    }
+    String utterance = doc["utteranceId"].isNull() ? "" : doc["utteranceId"].as<String>();
+    if (utterance.length() == 0 || utterance == g_wsActiveOutputUtteranceId) {
+      g_wsActiveOutputUtteranceId = "";
+    }
+    g_wsTtsStartMs = 0;
     g_wsTtsEnd = true;
     Serial.println("[WS] TTS_END");
     return;
@@ -743,6 +1910,16 @@ void initWsQaClient() {
   g_ws.setReconnectInterval(3000);
   g_wsInitialized = true;
   Serial.printf("[WS] Init client ws://%s:%u/ws/robot\n", WS_HOST, WS_PORT);
+}
+
+void restartWsQaClient() {
+  if (g_wsInitialized) {
+    g_ws.disconnect();
+    g_wsConnected = false;
+    g_wsInitialized = false;
+    delay(10);
+  }
+  initWsQaClient();
 }
 
 bool sendWsHello() {
@@ -784,11 +1961,42 @@ bool sendWsAudioEnd() {
   return g_ws.sendTXT(payload);
 }
 
+bool sendWsCancelOutput(const String& targetUtteranceId) {
+  DynamicJsonDocument doc(256);
+  doc["type"] = "CANCEL_OUTPUT";
+  doc["sessionId"] = SESSION_ID;
+  doc["robotId"] = ROBOT_ID;
+  if (targetUtteranceId.length() > 0) {
+    doc["targetUtteranceId"] = targetUtteranceId;
+  }
+  String payload;
+  serializeJson(doc, payload);
+  Serial.printf("[WS] CANCEL_OUTPUT target=%s\n",
+                targetUtteranceId.length() > 0 ? targetUtteranceId.c_str() : "<active>");
+  return g_ws.sendTXT(payload);
+}
+
+bool isCurrentQaUtterance(const DynamicJsonDocument& doc) {
+  String utterance = doc["utteranceId"].isNull() ? "" : doc["utteranceId"].as<String>();
+  if (utterance.length() == 0) {
+    return false;
+  }
+  return utterance == g_qaUtteranceId;
+}
+
+bool shouldResumeStoryAfterQa() {
+  if (g_state == STATE_STORY_PLAYING) {
+    return true;
+  }
+  return (g_currentStoryId.length() > 0) && (!g_storyCompleted);
+}
+
 void finishQaInterrupt(bool success, const char* reason) {
   g_qaStep = QA_STEP_IDLE;
   g_qaStepStartMs = 0;
   g_qaRecordStartMs = 0;
   resetQaCaptureState();
+  g_wsDropBinaryAudio = false;
   g_lastQaFinishMs = millis();
   resetAutoQaDetector();
 
@@ -799,17 +2007,27 @@ void finishQaInterrupt(bool success, const char* reason) {
     Serial.printf("[QA] Success: %s\n", reason);
   }
 
-  g_state = g_resumeStateAfterQa;
+  if (g_resumeStateAfterQa == STATE_STORY_PLAYING && (g_storyCompleted || g_currentStoryId.length() == 0)) {
+    g_state = STATE_IDLE;
+  } else {
+    g_state = g_resumeStateAfterQa;
+  }
   resetQaWsFlags();
   printState(reason);
 }
 
 void startQaInterrupt(const char* trigger) {
-  if (g_state == STATE_INTERRUPT_QA) {
+  bool restartFromQaTts = (g_state == STATE_INTERRUPT_QA && g_qaStep == QA_STEP_WAIT_TTS_END);
+  if (g_state == STATE_INTERRUPT_QA && !restartFromQaTts) {
     return;
   }
 
-  g_resumeStateAfterQa = (g_state == STATE_STORY_PLAYING) ? STATE_STORY_PLAYING : STATE_IDLE;
+  if (!restartFromQaTts) {
+    g_resumeStateAfterQa = shouldResumeStoryAfterQa() ? STATE_STORY_PLAYING : STATE_IDLE;
+  }
+
+  flushAudioOutputNow();
+  g_wsDropBinaryAudio = true;
   g_state = STATE_INTERRUPT_QA;
   g_qaStep = QA_STEP_WAIT_WS;
   g_qaStepStartMs = millis();
@@ -818,9 +2036,23 @@ void startQaInterrupt(const char* trigger) {
   resetQaCaptureState();
   resetAutoQaDetector();
 
-  initWsQaClient();
+  if (restartFromQaTts) {
+    bool cancelSent = false;
+    if (g_wsConnected) {
+      cancelSent = sendWsCancelOutput(g_wsActiveOutputUtteranceId);
+    }
 
-  Serial.printf("[QA] Start interrupt trigger=%s\n", trigger);
+    if (!cancelSent) {
+      // Fallback if CANCEL_OUTPUT could not be sent.
+      restartWsQaClient();
+    } else {
+      initWsQaClient();
+    }
+  } else {
+    initWsQaClient();
+  }
+
+  Serial.printf("[QA] Start interrupt trigger=%s restart=%d\n", trigger, (int)restartFromQaTts);
   setStatusColor(ST77XX_BLUE);
   showTextOnTft(String("QA start\n") + trigger, ST77XX_BLUE);
 }
@@ -922,30 +2154,46 @@ PlaybackResponse postPlaybackStart(const String& storyId);
 PlaybackResponse postPlaybackNext();
 
 // ========================= 8) AUDIO HANDLER (HW HOOK) =========================
-void playAudioChunk(WiFiClient& stream, int length, const String& mimeType, int sampleRate, int channels) {
+bool shouldAbortCurrentOutput() {
+  return (g_state == STATE_INTERRUPT_QA) || g_stopRequested;
+}
+
+bool playAudioChunk(WiFiClient& stream, int length, const String& mimeType, int sampleRate, int channels) {
   const int bufSize = 1024;
   uint8_t buf[bufSize];
-  size_t totalWritten = 0;
+  int totalQueued = 0;
+  bool enqueueFailed = false;
 
   int remain = length;
   while (remain > 0) {
+    if (shouldAbortCurrentOutput()) {
+      break;
+    }
+    pumpUiAndControlDuringBlockingWork();
+
+    // Allow auto VAD trigger while receiving long story audio chunk.
+    tickAutoQaTrigger();
+
     int toRead = remain > bufSize ? bufSize : remain;
     int n = stream.readBytes(buf, toRead);
     if (n <= 0) {
       break;
     }
 
-    if (g_i2sTxReady) {
-      size_t written = 0;
-      i2s_write(I2S_NUM_0, buf, n, &written, portMAX_DELAY);
-      totalWritten += written;
+    if (!enqueueAudioBytes(buf, n)) {
+      Serial.println("[AUDIO] enqueue failed during stream");
+      enqueueFailed = true;
+      break;
     }
+    totalQueued += n;
 
     remain -= n;
   }
 
-  Serial.printf("[AUDIO] read=%d i2s_written=%u mime=%s sr=%d ch=%d\n",
-                length - remain, (unsigned)totalWritten, mimeType.c_str(), sampleRate, channels);
+  bool interrupted = shouldAbortCurrentOutput();
+  Serial.printf("[AUDIO] read=%d queued=%d mime=%s sr=%d ch=%d interrupted=%d enqueueFailed=%d\n",
+                length - remain, totalQueued, mimeType.c_str(), sampleRate, channels, (int)interrupted, (int)enqueueFailed);
+  return !interrupted && !enqueueFailed;
 }
 
 PlaybackResponse parseAndPlayAudioResponse(HTTPClient& http, int code) {
@@ -980,27 +2228,41 @@ PlaybackResponse parseAndPlayAudioResponse(HTTPClient& http, int code) {
 
   WiFiClient* stream = http.getStreamPtr();
   if (stream != nullptr && contentLen > 0) {
-    playAudioChunk(*stream, contentLen, result.mimeType, result.sampleRate, result.channels);
+    bool ok = playAudioChunk(*stream, contentLen, result.mimeType, result.sampleRate, result.channels);
+    if (!ok) {
+      result.interrupted = shouldAbortCurrentOutput();
+      result.ok = result.interrupted;
+      return result;
+    }
   } else if (stream != nullptr && contentLen < 0) {
     // Chunked transfer: read until connection closes.
-    size_t totalWritten = 0;
+    size_t totalQueued = 0;
     while (http.connected()) {
+      if (shouldAbortCurrentOutput()) {
+        result.interrupted = true;
+        break;
+      }
+
+      pumpUiAndControlDuringBlockingWork();
+      tickAutoQaTrigger();
       int available = stream->available();
       if (available > 0) {
         uint8_t tmp[512];
         int n = stream->readBytes(tmp, available > 512 ? 512 : available);
         if (n <= 0) break;
-        if (g_i2sTxReady) {
-          size_t written = 0;
-          i2s_write(I2S_NUM_0, tmp, n, &written, portMAX_DELAY);
-          totalWritten += written;
+        if (!enqueueAudioBytes(tmp, n)) {
+          Serial.println("[AUDIO] enqueue failed during chunked stream");
+          result.interrupted = true;
+          break;
         }
+        totalQueued += (size_t)n;
         result.bytesLength += n;
       } else {
         delay(5);
       }
     }
-    Serial.printf("[AUDIO] chunked read=%d i2s_written=%u\n", result.bytesLength, (unsigned)totalWritten);
+    Serial.printf("[AUDIO] chunked read=%d queued=%u interrupted=%d\n",
+                  result.bytesLength, (unsigned)totalQueued, (int)result.interrupted);
   } else {
     consumeBody(http);
   }
@@ -1066,6 +2328,32 @@ PlaybackResponse postPlaybackNext() {
   return result;
 }
 
+PlaybackResponse getReminderExecuteAudio(const String& reminderId) {
+  PlaybackResponse result;
+  if (reminderId.length() == 0) {
+    return result;
+  }
+
+  HTTPClient http;
+  String url = buildUrl(String("/api/reminders/") + reminderId + "/execute-audio");
+
+  if (!http.begin(url)) {
+    Serial.println("[REMINDER] execute-audio begin failed");
+    return result;
+  }
+
+  http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
+  http.setTimeout(HTTP_READ_TIMEOUT_MS);
+  if (strlen(AUTH_BEARER_TOKEN) > 0) {
+    http.addHeader("Authorization", String("Bearer ") + AUTH_BEARER_TOKEN);
+  }
+
+  int code = http.GET();
+  result = parseAndPlayAudioResponse(http, code);
+  http.end();
+  return result;
+}
+
 // ========================= 9) COMMAND EXECUTOR =========================
 void onStartStory(const String& storyId) {
   if (storyId.length() == 0) {
@@ -1075,36 +2363,118 @@ void onStartStory(const String& storyId) {
     return;
   }
 
+  g_stopRequested = false;
   g_currentStoryId = storyId;
   g_storyCompleted = false;
 
   PlaybackResponse res = postPlaybackStart(storyId);
   if (!res.ok) {
     Serial.println("[CMD] START_STORY failed to start playback");
+    g_storyCompleted = true;
+    g_currentStoryId = "";
     g_state = STATE_IDLE;
     printState("start_story_failed");
+    return;
+  }
+  if (res.interrupted || g_state == STATE_INTERRUPT_QA) {
+    if (g_stopRequested) {
+      Serial.println("[CMD] START_STORY interrupted by STOP");
+    } else {
+      Serial.println("[CMD] START_STORY interrupted by QA");
+    }
     return;
   }
 
   g_storyCompleted = res.completed;
   g_state = g_storyCompleted ? STATE_IDLE : STATE_STORY_PLAYING;
+  if (g_storyCompleted) {
+    g_currentStoryId = "";
+  }
 
   Serial.printf("[CMD] START_STORY ok segment=%d completed=%d\n", res.segmentOrder, (int)res.completed);
   printState("after START_STORY");
 }
 
 void onStopStory() {
+  flushAudioOutputNow();
   callStopPlayback();
   g_state = STATE_IDLE;
   g_storyCompleted = true;
   g_currentStoryId = "";
+  g_stopRequested = false;
+  g_lastQaFinishMs = 0;
   printState("after STOP_STORY");
 }
 
+void preemptForReminderPriority() {
+  // Cut current speaker output immediately.
+  g_stopRequested = true;
+  flushAudioOutputNow();
+
+  // If QA/TTS is active, cancel robot output and drop incoming WS binary audio.
+  if (g_state == STATE_INTERRUPT_QA) {
+    g_wsDropBinaryAudio = true;
+    if (g_wsConnected) {
+      sendWsCancelOutput(g_wsActiveOutputUtteranceId);
+    }
+    g_wsActiveOutputUtteranceId = "";
+    g_wsTtsStartMs = 0;
+    g_wsTtsEnd = false;
+    g_qaStep = QA_STEP_IDLE;
+    g_qaStepStartMs = 0;
+    g_qaRecordStartMs = 0;
+    resetQaCaptureState();
+    resetQaWsFlags();
+    g_state = STATE_IDLE;
+    g_resumeStateAfterQa = STATE_IDLE;
+    g_lastQaFinishMs = millis();
+  }
+
+  // End story playback session so reminder can take priority cleanly.
+  if (g_state == STATE_STORY_PLAYING || g_currentStoryId.length() > 0) {
+    callStopPlayback();
+    g_state = STATE_IDLE;
+    g_storyCompleted = true;
+    g_currentStoryId = "";
+  }
+
+  // Allow reminder stream to play.
+  g_stopRequested = false;
+}
+
 void onReminderCreate(const String& reminderId) {
-  // You can call: GET /api/reminders/{reminderId}/execute-data and play reminder audio.
+  // Pull reminder audio from backend, backend will serve from reminder cache when available.
   Serial.printf("[CMD] REMINDER_CREATE reminderId=%s\n", reminderId.c_str());
-  showTextOnTft(String("Reminder create\n") + reminderId);
+  if (reminderId.length() == 0) {
+    Serial.println("[CMD] REMINDER_CREATE missing reminderId");
+    setStatusColor(ST77XX_RED);
+    showTextOnTft("REMINDER_CREATE missing reminderId");
+    return;
+  }
+
+  preemptForReminderPriority();
+  setStatusColor(ST77XX_BLUE);
+  showTextOnTft(String("Reminder\n") + reminderId);
+
+  PlaybackResponse res = getReminderExecuteAudio(reminderId);
+  if (!res.ok) {
+    Serial.printf("[CMD] REMINDER_CREATE failed status=%d reminderId=%s\n", res.httpCode, reminderId.c_str());
+    setStatusColor(ST77XX_RED);
+    showTextOnTft("Reminder audio failed");
+    return;
+  }
+
+  if (res.interrupted || g_state == STATE_INTERRUPT_QA) {
+    if (g_stopRequested) {
+      Serial.printf("[CMD] REMINDER_CREATE interrupted by STOP reminderId=%s\n", reminderId.c_str());
+    } else {
+      Serial.printf("[CMD] REMINDER_CREATE interrupted by QA reminderId=%s\n", reminderId.c_str());
+    }
+    return;
+  }
+
+  Serial.printf("[CMD] REMINDER_CREATE played status=%d bytes=%d mime=%s sr=%d ch=%d\n",
+                res.httpCode, res.bytesLength, res.mimeType.c_str(), res.sampleRate, res.channels);
 }
 
 void onReminderCancel(const String& reminderId) {
@@ -1163,6 +2533,14 @@ void tickStoryPlayback() {
     Serial.println("[PLAYBACK] next failed, keep state and retry");
     return;
   }
+  if (res.interrupted || g_state == STATE_INTERRUPT_QA) {
+    if (g_stopRequested) {
+      Serial.println("[PLAYBACK] next interrupted by STOP");
+    } else {
+      Serial.println("[PLAYBACK] next interrupted by QA");
+    }
+    return;
+  }
 
   g_storyCompleted = res.completed;
   Serial.printf("[PLAYBACK] next ok segment=%d completed=%d\n", res.segmentOrder, (int)res.completed);
@@ -1187,6 +2565,10 @@ void tickInterruptQa() {
   const unsigned long now = millis();
 
   if (g_wsError) {
+    if (isWsNoSpeechError()) {
+      restartQaListeningAfterNoSpeech("qa_ws_no_speech");
+      return;
+    }
     finishQaInterrupt(false, "qa_ws_error");
     return;
   }
@@ -1236,21 +2618,35 @@ void tickInterruptQa() {
       size_t readBytes = 0;
       esp_err_t err = i2s_read(I2S_NUM_1, micBuf, QA_MIC_CHUNK_BYTES, &readBytes, 20 / portTICK_PERIOD_MS);
       if (err != ESP_OK || readBytes == 0) {
+        unsigned long waitMs = now - g_qaRecordStartMs;
+        if (waitMs > QA_WAIT_SPEECH_TIMEOUT_MS) {
+          restartQaListeningAfterNoSpeech("qa_no_audio");
+          return;
+        }
         if (now - g_qaRecordStartMs > QA_MAX_UTTERANCE_MS) {
           finishQaInterrupt(false, "qa_mic_timeout");
         }
         break;
       }
 
-      int frameAbs = qaFrameAvgAbsPcm16(micBuf, readBytes);
+      int frameAbs = 0;
+      int peakAbs = 0;
+      uint16_t zcr = 0;
+      float peakToAvg = 0.0f;
+      analyzePcm16Frame(micBuf, readBytes, frameAbs, peakAbs, zcr, peakToAvg);
       int threshold = qaCurrentThresholdAbs();
-      bool speechStrong = frameAbs >= threshold;
-      bool speechWeak = frameAbs >= (int)(threshold * 0.7f);
+      bool zcrStrongOk = zcr >= QA_VAD_MIN_ZCR && zcr <= QA_VAD_MAX_ZCR;
+      bool zcrWeakOk = zcr >= QA_VAD_WEAK_MIN_ZCR && zcr <= QA_VAD_WEAK_MAX_ZCR;
+      bool peakShapeOk = peakToAvg > 0.0f && peakToAvg <= QA_VAD_MAX_PEAK_TO_AVG;
+      bool speechStrong = (frameAbs >= threshold) && zcrStrongOk && peakShapeOk;
+      bool speechWeak = (frameAbs >= (int)(threshold * 0.65f)) && zcrWeakOk && peakShapeOk;
 
       if (!g_qaSpeechStarted) {
         qaPushPreRoll(micBuf, readBytes);
         unsigned long waitMs = now - g_qaRecordStartMs;
-        bool forceStart = waitMs >= QA_FORCE_START_MS;
+        bool forceStart = QA_ENABLE_FORCE_START &&
+                          waitMs >= QA_FORCE_START_MS &&
+                          g_qaSpeechHitCount >= QA_FORCE_START_MIN_HITS;
 
         if (!speechStrong) {
           qaUpdateNoiseFloor(frameAbs);
@@ -1261,7 +2657,11 @@ void tickInterruptQa() {
             g_qaSpeechHitCount++;
           }
         } else if (g_qaSpeechHitCount > 0) {
-          g_qaSpeechHitCount--;
+          if (frameAbs < (int)(threshold * 0.8f)) {
+            g_qaSpeechHitCount = 0;
+          } else {
+            g_qaSpeechHitCount--;
+          }
         }
 
         if (g_qaSpeechHitCount >= QA_SPEECH_HIT_FRAMES || forceStart) {
@@ -1269,12 +2669,16 @@ void tickInterruptQa() {
           g_qaSpeechStartMs = now;
           g_qaLastSpeechMs = now;
           qaFlushPreRollToWs();
-          Serial.printf("[QA] Speech started abs=%d threshold=%d mode=%s\n",
-                        frameAbs, threshold, forceStart ? "force" : "vad");
+          Serial.printf("[QA] Speech started abs=%d zcr=%u ratio=%.2f threshold=%d mode=%s\n",
+                        frameAbs,
+                        (unsigned)zcr,
+                        peakToAvg,
+                        threshold,
+                        forceStart ? "force" : "vad");
           showTextOnTft("QA recording...", ST77XX_BLUE);
         } else if (waitMs > QA_WAIT_SPEECH_TIMEOUT_MS) {
-          sendWsAudioEnd();
-          finishQaInterrupt(false, "qa_no_speech");
+          restartQaListeningAfterNoSpeech("qa_no_speech");
+          return;
         }
         break;
       }
@@ -1297,6 +2701,7 @@ void tickInterruptQa() {
         }
         Serial.printf("[QA] Speech ended utterMs=%lu silenceMs=%lu sentBytes=%u\n",
                       utterMs, silenceMs, (unsigned)g_qaSentAudioBytes);
+        g_wsTtsEnd = false;
         g_qaStep = QA_STEP_WAIT_TTS_END;
         g_qaStepStartMs = now;
         showTextOnTft("QA processing...", ST77XX_BLUE);
@@ -1330,11 +2735,17 @@ void setup() {
   initHardware();
   ensureWifiConnected();
   initWsQaClient();
+  initCommandPullWorker();
   printState("boot");
 }
 
 void loop() {
+  tickBootButtonToggle();
+
   if (!ensureWifiConnected()) {
+    if (g_statsOverlayEnabled) {
+      drawStatsOverlay(false);
+    }
     delay(50);
     return;
   }
@@ -1343,30 +2754,22 @@ void loop() {
     g_ws.loop();
   }
 
+  processPendingCommands();
   tickAutoQaTrigger();
 
   while (Serial.available() > 0) {
     char c = (char)Serial.read();
     if (c == 'q' || c == 'Q') {
       startQaInterrupt("serial");
+    } else if (c == 'b' || c == 'B') {
+      toggleStatsOverlay();
     }
-  }
-
-  const unsigned long now = millis();
-  const uint32_t pollInterval = (g_state == STATE_IDLE) ? POLL_IDLE_MS : POLL_PLAYING_MS;
-
-  if (now - g_lastPollMs >= pollInterval) {
-    PulledCommand cmd;
-    bool ok = pullCommandFromServer(cmd);
-    if (ok && cmd.hasCommand) {
-      executeCommand(cmd);
-    }
-    g_lastPollMs = now;
   }
 
   tickInterruptQa();
+  maybeTickFaceUi();
 
-  if (g_state == STATE_STORY_PLAYING) {
+  if (g_state == STATE_STORY_PLAYING && !g_stopRequested) {
     tickStoryPlayback();
   }
 
