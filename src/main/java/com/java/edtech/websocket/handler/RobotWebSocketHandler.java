@@ -127,6 +127,11 @@ public class RobotWebSocketHandler extends AbstractWebSocketHandler {
             sendError(session, request, "NO_AUDIO", "No audio received");
             return;
         }
+        log.info("[LATENCY][AUDIO_END] session={} utterance={} audioEndReceivedEpochMs={} audioBytes={}",
+                state.getSessionId(),
+                state.getUtteranceId(),
+                System.currentTimeMillis(),
+                state.getAudioBytes().length);
 
         CompletableFuture.runAsync(() -> processAudioEnd(session, request, state), pipelineExecutor)
                 .exceptionally(ex -> {
@@ -178,6 +183,7 @@ public class RobotWebSocketHandler extends AbstractWebSocketHandler {
             if (ttsAudio.getAudioBytes() == null || ttsAudio.getAudioBytes().length == 0) {
                 return;
             }
+            long ttsReadyEpochMs = System.currentTimeMillis();
 
             String utteranceId = state.getUtteranceId();
             sessionManager.markOutputStarted(session, utteranceId);
@@ -199,7 +205,13 @@ public class RobotWebSocketHandler extends AbstractWebSocketHandler {
                 ttsStart.setAudioBytesLength(ttsAudio.getAudioBytes().length);
                 safeSendJson(session, ttsStart);
 
-                boolean cancelled = sendBinaryInChunks(session, ttsAudio.getAudioBytes(), utteranceId);
+                boolean cancelled = sendBinaryInChunks(
+                        session,
+                        ttsAudio.getAudioBytes(),
+                        state.getSessionId(),
+                        utteranceId,
+                        ttsReadyEpochMs
+                );
                 if (cancelled) {
                     log.info("TTS stream cancelled mid-flight. session={} utterance={}", session.getId(), utteranceId);
                 }
@@ -296,7 +308,11 @@ public class RobotWebSocketHandler extends AbstractWebSocketHandler {
     }
 
     // Returns true when stream was cancelled, false when stream fully sent.
-    private boolean sendBinaryInChunks(WebSocketSession session, byte[] audioBytes, String utteranceId) {
+    private boolean sendBinaryInChunks(WebSocketSession session,
+                                       byte[] audioBytes,
+                                       String sessionId,
+                                       String utteranceId,
+                                       long ttsReadyEpochMs) {
         if (audioBytes == null || audioBytes.length == 0) {
             return false;
         }
@@ -320,6 +336,17 @@ public class RobotWebSocketHandler extends AbstractWebSocketHandler {
                         return true;
                     }
                     session.sendMessage(new BinaryMessage(chunk));
+                    if (offset == 0) {
+                        long firstBinaryEpochMs = System.currentTimeMillis();
+                        log.info("[LATENCY][T4] session={} utterance={} ttsReadyEpochMs={} firstBinaryEpochMs={} ttsToFirstBinaryMs={} firstChunkBytes={} totalAudioBytes={}",
+                                sessionId,
+                                utteranceId,
+                                ttsReadyEpochMs,
+                                firstBinaryEpochMs,
+                                firstBinaryEpochMs - ttsReadyEpochMs,
+                                len,
+                                audioBytes.length);
+                    }
                 }
             } catch (IOException e) {
                 log.debug("Failed to send WS binary chunk session={} utterance={}", session.getId(), utteranceId, e);

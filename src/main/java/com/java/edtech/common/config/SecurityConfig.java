@@ -35,6 +35,7 @@ public class SecurityConfig {
                                 "/api/auth/register",
                                 "/api/auth/refresh",
                                 "/api/conversations/**",
+                                "/api/llm/**",
                                 "/api/robots/**",
                                 "/api/reminders/**",
                                 "/api/stories/**",

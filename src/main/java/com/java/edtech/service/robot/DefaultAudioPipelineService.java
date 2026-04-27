@@ -8,12 +8,15 @@ import com.java.edtech.service.story.StoryQaContext;
 import com.java.edtech.service.story.StoryService;
 import com.java.edtech.websocket.dto.AudioFormat;
 import lombok.RequiredArgsConstructor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 @Service
 @RequiredArgsConstructor
 public class DefaultAudioPipelineService implements AudioPipelineService {
     private static final int STORY_QA_CONTEXT_SEGMENTS = 4;
+    private static final Logger log = LoggerFactory.getLogger(DefaultAudioPipelineService.class);
 
     private final SttService sttService;
     private final LlmService llmService;
@@ -28,6 +31,12 @@ public class DefaultAudioPipelineService implements AudioPipelineService {
                                             Integer channels,
                                             AudioFormat format) {
         String transcript = sttService.transcribe(compressedAudioBytes, sampleRate, channels, format);
+        log.info("[LATENCY][T2] session={} utterance={} sttDoneEpochMs={} audioBytes={} transcriptChars={}",
+                sessionId,
+                utteranceId,
+                System.currentTimeMillis(),
+                compressedAudioBytes == null ? 0 : compressedAudioBytes.length,
+                transcript == null ? 0 : transcript.length());
         if (transcript == null || transcript.isBlank()) {
             return AudioPipelineResult.builder()
                     .transcript("")
@@ -40,6 +49,13 @@ public class DefaultAudioPipelineService implements AudioPipelineService {
         LlmResponse llmResponse = storyQaContext == null
                 ? llmService.generateReply(transcript)
                 : llmService.generateStoryQaReply(buildStoryQaInput(storyQaContext, transcript));
+        log.info("[LATENCY][T3] session={} utterance={} llmDoneEpochMs={} success={} replyChars={} error={}",
+                sessionId,
+                utteranceId,
+                System.currentTimeMillis(),
+                llmResponse.isSuccess(),
+                llmResponse.getText() == null ? 0 : llmResponse.getText().length(),
+                llmResponse.getError() == null ? "" : llmResponse.getError());
 
         if (!llmResponse.isSuccess()) {
             return AudioPipelineResult.builder()

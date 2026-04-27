@@ -36,14 +36,14 @@ static const char* WIFI_SSID = "cong";
 static const char* WIFI_PASS = "27042004";
 
 // Example: "http://192.168.1.20:8080"
-static const char* BACKEND_BASE_URL = "http://172.20.10.2:5999";
+static const char* BACKEND_BASE_URL = "http://172.20.10.3:5999";
 
 // Robot identity from backend DB
 static const char* ROBOT_ID = "4f864132-2c3f-4fff-9811-19a840e93473";
 static const char* SESSION_ID = "10000000-0000-0000-0000-000000000001"; // WS session id should be UUID.
 
 // Optional WS QA endpoint (not used by polling flow yet)
-static const char* WS_HOST = "172.20.10.2";
+static const char* WS_HOST = "172.20.10.3";
 static const uint16_t WS_PORT = 5999;
 
 // Optional Bearer token. Keep empty if backend does not require auth.
@@ -116,6 +116,11 @@ static const uint32_t COMMAND_PULL_INTERVAL_MS = 1000;
 static const uint8_t COMMAND_QUEUE_DEPTH = 8;
 static const uint32_t AUTO_QA_SPEAKER_GUARD_MS = 900;
 static const uint32_t QA_CAPTURE_SPEAKER_GUARD_MS = 600;
+static const int AUTO_QA_STORY_REF_MIN_ABS = 120;
+static const float AUTO_QA_STORY_MIN_MIC_TO_REF_RATIO = 0.86f;
+static const uint8_t REMINDER_REPEAT_COUNT = 3;
+static const uint32_t REMINDER_REPEAT_INTERVAL_MS = 30000;
+static const uint32_t REMINDER_LED_BLINK_INTERVAL_MS = 240;
 static const bool AEC_ENABLED = true;
 static const uint16_t AEC_REF_RING_SAMPLES = 8192; // 16kHz domain ring for speaker reference.
 static const uint16_t AEC_PATH_DELAY_SAMPLES = 220; // ~13.7 ms at 16kHz, tune per enclosure.
@@ -123,7 +128,7 @@ static const float AEC_ADAPT_RATE = 0.18f;
 static const int AEC_ADAPT_MIN_REF_ABS = 110;
 static const float AEC_MAX_ECHO_GAIN = 1.6f;
 static const bool TFT_THROTTLE_UI_FOR_AUDIO = true;
-static const uint32_t TFT_UI_FRAME_MIN_INTERVAL_MS = 120;
+static const uint32_t TFT_UI_FRAME_MIN_INTERVAL_MS = 85;
 // ILI9225 native is 176x220. We use landscape (orientation=1) to keep old UI layout.
 static const int TFT_SCREEN_W = 220;
 static const int TFT_SCREEN_H = 176;
@@ -225,6 +230,11 @@ const EyeFrame kIdleEyeFrames[] = {
 bool g_eyeAnimActive = false;
 uint8_t g_eyeFrameIndex = 0;
 unsigned long g_eyeFrameStartMs = 0;
+bool g_eyeRenderCacheValid = false;
+int g_eyeRenderX1 = 0;
+int g_eyeRenderY1 = 0;
+int g_eyeRenderX2 = 0;
+int g_eyeRenderY2 = 0;
 bool g_listeningFaceShown = false;
 bool g_neutralFaceShown = false;
 uint8_t g_listeningBrowPhase = 0;
@@ -260,6 +270,9 @@ String g_wsActiveOutputUtteranceId;
 int g_wsSkipAudioHeaderBytes = 0;
 unsigned long g_wsTtsStartMs = 0;
 uint32_t g_qaTtsWaitTimeoutMs = QA_WAIT_TTS_END_MS;
+volatile unsigned long g_latencyT1Ms = 0;
+volatile bool g_latencyAwaitT5 = false;
+volatile uint32_t g_latencyUtteranceSeq = 0;
 
 bool g_qaSpeechStarted = false;
 unsigned long g_qaSpeechStartMs = 0;
@@ -290,10 +303,14 @@ int16_t g_aecRefRing[AEC_REF_RING_SAMPLES] = {0};
 volatile uint32_t g_aecRefWritePos = 0;
 volatile uint32_t g_aecResampleAcc = 0;
 float g_aecEchoGain = 0.25f;
+bool g_reminderBlinkActive = false;
+bool g_reminderBlinkRedOn = false;
+unsigned long g_reminderBlinkLastToggleMs = 0;
 
 struct AudioOutChunk {
   uint16_t len = 0;
   uint8_t data[AUDIO_OUT_CHUNK_BYTES];
+  bool fromWsTts = false;
 };
 
 QueueHandle_t g_audioOutQueue = nullptr;
@@ -363,6 +380,10 @@ void drawStatsOverlay(bool forceDraw);
 bool isBootButtonReleased();
 void markSpeakerAudioActivity();
 bool isSpeakerLikelyActive(uint32_t guardMs);
+int estimateAecReferenceAbs(size_t sampleCount);
+void startReminderBlink();
+void stopReminderBlink();
+void tickReminderBlink();
 void aecPushSpeakerReference(const uint8_t* data, size_t bytesLen);
 void applyAecToMicFrame(uint8_t* data, size_t bytesLen);
 void tftFillScreen(uint16_t color);
@@ -489,11 +510,16 @@ void tftDrawMultilineText(int x, int y, const String& text, uint16_t color) {
   }
 }
 
+void resetEyeRenderCache() {
+  g_eyeRenderCacheValid = false;
+}
+
 void showTextOnTft(const String& message, uint16_t color = ST77XX_WHITE) {
   if (!g_tftReady || !g_textUiEnabled) {
     return;
   }
 
+  resetEyeRenderCache();
   g_eyeAnimActive = false;
   g_lastUiTextMs = millis();
   tftFillScreen(ST77XX_BLACK);
@@ -505,6 +531,7 @@ void showWifiStatusOnTft(const String& message, uint16_t color = ST77XX_WHITE) {
     return;
   }
 
+  resetEyeRenderCache();
   tftFillScreen(ST77XX_BLACK);
   tftDrawMultilineText(2, 24, message, color);
 }
@@ -523,6 +550,7 @@ void onFirstWifiConnected() {
   const unsigned long now = millis();
   g_lastUiTextMs = (now > EYE_TEXT_HOLD_MS) ? (now - EYE_TEXT_HOLD_MS) : 0;
   if (g_tftReady) {
+    resetEyeRenderCache();
     tftFillScreen(EYE_BG_COLOR);
   }
 }
@@ -557,6 +585,49 @@ void drawRobotEyebrows(int leftX, int rightX, int eyeWidth, int eyeTopY, int bro
   }
 }
 
+void computeEyeRenderBounds(int leftX,
+                            int rightX,
+                            int eyeWidth,
+                            int y,
+                            int height,
+                            int browLift,
+                            int browTilt,
+                            bool isHappy,
+                            int& outX1,
+                            int& outY1,
+                            int& outX2,
+                            int& outY2) {
+  int lift = browLift;
+  int tilt = browTilt;
+  if (lift < -4) {
+    lift = -4;
+  } else if (lift > 8) {
+    lift = 8;
+  }
+  if (tilt < -8) {
+    tilt = -8;
+  } else if (tilt > 8) {
+    tilt = 8;
+  }
+  if (isHappy && tilt > 0) {
+    tilt = 0;
+  }
+
+  int browBaseY = y - 18 - lift;
+  int browTopY = browBaseY + (tilt < 0 ? tilt : 0);
+  int browBottomY = browBaseY + 3 + (tilt > 0 ? tilt : 0);
+
+  int eyeBottomY = y + height - 1;
+  if (isHappy) {
+    eyeBottomY += 28;
+  }
+
+  outX1 = leftX - 10;
+  outX2 = rightX + eyeWidth + 10;
+  outY1 = browTopY - 4;
+  outY2 = (eyeBottomY > browBottomY ? eyeBottomY : browBottomY) + 4;
+}
+
 void drawRobotEyes(int offsetX, int offsetY, int height, bool isHappy, int browLift, int browTilt) {
   if (!g_tftReady) {
     return;
@@ -573,9 +644,23 @@ void drawRobotEyes(int offsetX, int offsetY, int height, bool isHappy, int browL
   const int leftX = EYE_LEFT_X_BASE + offsetX;
   const int rightX = EYE_RIGHT_X_BASE + offsetX;
   const int y = EYE_BASE_Y + offsetY + (normalHeight - height) / 2;
+  int newX1 = 0;
+  int newY1 = 0;
+  int newX2 = 0;
+  int newY2 = 0;
+  computeEyeRenderBounds(
+      leftX, rightX, eyeWidth, y, height, browLift, browTilt, isHappy,
+      newX1, newY1, newX2, newY2);
 
-  // Clear full eye band to avoid residual pixels on left/right edges.
-  tftFillRectXYWH(0, 12, TFT_SCREEN_W, 132, EYE_BG_COLOR);
+  if (g_eyeRenderCacheValid) {
+    int clearX1 = g_eyeRenderX1 < newX1 ? g_eyeRenderX1 : newX1;
+    int clearY1 = g_eyeRenderY1 < newY1 ? g_eyeRenderY1 : newY1;
+    int clearX2 = g_eyeRenderX2 > newX2 ? g_eyeRenderX2 : newX2;
+    int clearY2 = g_eyeRenderY2 > newY2 ? g_eyeRenderY2 : newY2;
+    tftFillRectXYWH(clearX1, clearY1, (clearX2 - clearX1 + 1), (clearY2 - clearY1 + 1), EYE_BG_COLOR);
+  } else {
+    tftFillRectXYWH(newX1, newY1, (newX2 - newX1 + 1), (newY2 - newY1 + 1), EYE_BG_COLOR);
+  }
 
   tftFillRoundRectCompat(leftX, y, eyeWidth, height, EYE_CORNER_RADIUS, EYE_COLOR);
   tftFillRoundRectCompat(rightX, y, eyeWidth, height, EYE_CORNER_RADIUS, EYE_COLOR);
@@ -586,6 +671,11 @@ void drawRobotEyes(int offsetX, int offsetY, int height, bool isHappy, int browL
   }
 
   drawRobotEyebrows(leftX, rightX, eyeWidth, y, browLift, browTilt, isHappy);
+  g_eyeRenderX1 = newX1;
+  g_eyeRenderY1 = newY1;
+  g_eyeRenderX2 = newX2;
+  g_eyeRenderY2 = newY2;
+  g_eyeRenderCacheValid = true;
 }
 
 void drawListeningEyes(uint8_t phase) {
@@ -823,6 +913,46 @@ void printState(const char* reason) {
   }
 }
 
+void applyStatusLedByState() {
+  if (g_state == STATE_IDLE) {
+    setStatusColor(ST77XX_GREEN);
+  } else {
+    setStatusColor(ST77XX_BLUE);
+  }
+}
+
+void startReminderBlink() {
+  g_reminderBlinkActive = true;
+  g_reminderBlinkRedOn = false;
+  g_reminderBlinkLastToggleMs = 0;
+}
+
+void stopReminderBlink() {
+  g_reminderBlinkActive = false;
+  g_reminderBlinkRedOn = false;
+  g_reminderBlinkLastToggleMs = 0;
+  applyStatusLedByState();
+}
+
+void tickReminderBlink() {
+  if (!g_reminderBlinkActive) {
+    return;
+  }
+
+  unsigned long now = millis();
+  if (g_reminderBlinkLastToggleMs != 0 && (now - g_reminderBlinkLastToggleMs) < REMINDER_LED_BLINK_INTERVAL_MS) {
+    return;
+  }
+
+  g_reminderBlinkLastToggleMs = now;
+  g_reminderBlinkRedOn = !g_reminderBlinkRedOn;
+  if (g_reminderBlinkRedOn) {
+    setStatusColor(ST77XX_RED);
+  } else {
+    setStatusLed(false, false, false);
+  }
+}
+
 void consumeBody(HTTPClient& http) {
   WiFiClient* stream = http.getStreamPtr();
   if (stream == nullptr) {
@@ -835,6 +965,7 @@ void consumeBody(HTTPClient& http) {
 
 void pumpUiAndControlDuringBlockingWork() {
   tickBootButtonToggle();
+  tickReminderBlink();
   if (g_wsInitialized) {
     g_ws.loop();
   }
@@ -872,6 +1003,34 @@ bool isSpeakerLikelyActive(uint32_t guardMs) {
     return false;
   }
   return (millis() - lastMs) < guardMs;
+}
+
+int estimateAecReferenceAbs(size_t sampleCount) {
+  if (!AEC_ENABLED || sampleCount == 0 || sampleCount >= AEC_REF_RING_SAMPLES) {
+    return 0;
+  }
+
+  uint32_t writePos = g_aecRefWritePos;
+  int32_t start = (int32_t)writePos - (int32_t)AEC_PATH_DELAY_SAMPLES - (int32_t)sampleCount;
+  while (start < 0) {
+    start += (int32_t)AEC_REF_RING_SAMPLES;
+  }
+  while (start >= (int32_t)AEC_REF_RING_SAMPLES) {
+    start -= (int32_t)AEC_REF_RING_SAMPLES;
+  }
+
+  uint64_t sumAbs = 0;
+  for (size_t i = 0; i < sampleCount; i++) {
+    uint32_t refIdx = (uint32_t)start + (uint32_t)i;
+    if (refIdx >= AEC_REF_RING_SAMPLES) {
+      refIdx -= AEC_REF_RING_SAMPLES;
+    }
+    int16_t ref = g_aecRefRing[refIdx];
+    int refAbs = ref < 0 ? -ref : ref;
+    sumAbs += (uint64_t)refAbs;
+  }
+
+  return (int)(sumAbs / sampleCount);
 }
 
 void aecPushSpeakerReference(const uint8_t* data, size_t bytesLen) {
@@ -994,6 +1153,23 @@ void audioOutTask(void* pvParameters) {
     if (written > 0) {
       aecPushSpeakerReference(chunk.data, written);
       markSpeakerAudioActivity();
+      if (chunk.fromWsTts && g_latencyAwaitT5) {
+        unsigned long t5Ms = millis();
+        unsigned long t1Ms = g_latencyT1Ms;
+        uint32_t utteranceSeq = g_latencyUtteranceSeq;
+        g_latencyAwaitT5 = false;
+        if (t1Ms > 0 && t5Ms >= t1Ms) {
+          Serial.printf("[LATENCY][T5] utteranceSeq=%lu t5Millis=%lu deltaMs=%lu\n",
+                        (unsigned long)utteranceSeq,
+                        t5Ms,
+                        t5Ms - t1Ms);
+        } else {
+          Serial.printf("[LATENCY][T5] utteranceSeq=%lu t5Millis=%lu deltaMs=NA t1Millis=%lu\n",
+                        (unsigned long)utteranceSeq,
+                        t5Ms,
+                        t1Ms);
+        }
+      }
     }
   }
 }
@@ -1042,7 +1218,10 @@ void flushAudioOutputNow() {
   }
 }
 
-bool enqueueAudioBytes(const uint8_t* data, size_t bytesLen, uint32_t waitMs = AUDIO_OUT_ENQUEUE_TIMEOUT_MS) {
+bool enqueueAudioBytes(const uint8_t* data,
+                       size_t bytesLen,
+                       uint32_t waitMs = AUDIO_OUT_ENQUEUE_TIMEOUT_MS,
+                       bool fromWsTts = false) {
   if (data == nullptr || bytesLen == 0) {
     return true;
   }
@@ -1062,6 +1241,7 @@ bool enqueueAudioBytes(const uint8_t* data, size_t bytesLen, uint32_t waitMs = A
 
     chunk.len = (uint16_t)n;
     memcpy(chunk.data, data + offset, n);
+    chunk.fromWsTts = fromWsTts;
 
     if (xQueueSend(g_audioOutQueue, &chunk, waitTicks) != pdTRUE) {
       return false;
@@ -1285,6 +1465,7 @@ void drawStatsOverlay(bool forceDraw) {
 void toggleStatsOverlay() {
   g_statsOverlayEnabled = !g_statsOverlayEnabled;
   g_statsLastDrawMs = 0;
+  resetEyeRenderCache();
 
   if (g_statsOverlayEnabled) {
     g_eyeAnimActive = false;
@@ -1630,6 +1811,7 @@ void resetQaWsFlags() {
   g_wsLastAssistantReply = "";
   g_wsSkipAudioHeaderBytes = 0;
   g_wsTtsStartMs = 0;
+  g_latencyAwaitT5 = false;
   g_qaTtsWaitTimeoutMs = QA_WAIT_TTS_END_MS;
 }
 
@@ -1752,7 +1934,6 @@ void resetAutoQaDetector() {
 }
 
 bool autoQaCanListenNow() {
-  // Keep speaker guard for non-story states to suppress speaker feedback.
   if (g_state != STATE_STORY_PLAYING && isSpeakerLikelyActive(AUTO_QA_SPEAKER_GUARD_MS)) {
     return false;
   }
@@ -1791,11 +1972,11 @@ void tickAutoQaTrigger() {
   if (now - g_lastQaFinishMs < AUTO_QA_COOLDOWN_MS) {
     return;
   }
-  if (g_state != STATE_STORY_PLAYING && isSpeakerLikelyActive(AUTO_QA_SPEAKER_GUARD_MS)) {
+  bool speakerActive = isSpeakerLikelyActive(AUTO_QA_SPEAKER_GUARD_MS);
+  if (g_state != STATE_STORY_PLAYING && speakerActive) {
     resetAutoQaDetector();
     return;
   }
-
   uint8_t micBuf[QA_MIC_CHUNK_BYTES];
   size_t readBytes = 0;
   esp_err_t err = i2s_read(I2S_NUM_1, micBuf, QA_MIC_CHUNK_BYTES, &readBytes, 0);
@@ -1848,6 +2029,18 @@ void tickAutoQaTrigger() {
     peakShapeOk = peakToAvg >= AUTO_QA_STORY_MIN_PEAK_TO_AVG && peakToAvg <= AUTO_QA_STORY_MAX_PEAK_TO_AVG;
   }
   bool speechCandidate = speechStrong && zcrOk && peakShapeOk;
+  bool rejectedByEchoDominance = false;
+  int refAbs = 0;
+  if (storyBargeInMode && speakerActive && readBytes >= 2) {
+    refAbs = estimateAecReferenceAbs(readBytes / 2);
+    if (refAbs >= AUTO_QA_STORY_REF_MIN_ABS) {
+      float micToRefRatio = (float)frameAbs / (float)refAbs;
+      if (micToRefRatio < AUTO_QA_STORY_MIN_MIC_TO_REF_RATIO) {
+        rejectedByEchoDominance = true;
+        speechCandidate = false;
+      }
+    }
+  }
 
   if (!speechCandidate) {
     g_autoQaNoiseEma = (1.0f - AUTO_QA_NOISE_EMA_ALPHA) * g_autoQaNoiseEma + AUTO_QA_NOISE_EMA_ALPHA * (float)frameAbs;
@@ -1855,7 +2048,7 @@ void tickAutoQaTrigger() {
       g_autoQaNoiseEma = 80.0f;
     }
     if (g_autoQaSpeechHits > 0) {
-      if (frameAbs < (int)(threshold * 0.8f)) {
+      if (rejectedByEchoDominance || frameAbs < (int)(threshold * 0.8f)) {
         g_autoQaSpeechHits = 0;
       } else {
         g_autoQaSpeechHits--;
@@ -1866,8 +2059,13 @@ void tickAutoQaTrigger() {
   }
 
   if (g_autoQaSpeechHits >= requiredHits) {
-    Serial.printf("[AUTO_QA] Voice trigger abs=%d zcr=%u ratio=%.2f threshold=%d state=%d\n",
-                  frameAbs, (unsigned)zcr, peakToAvg, threshold, (int)g_state);
+    if (storyBargeInMode && speakerActive) {
+      Serial.printf("[AUTO_QA] Voice trigger abs=%d refAbs=%d zcr=%u ratio=%.2f threshold=%d state=%d\n",
+                    frameAbs, refAbs, (unsigned)zcr, peakToAvg, threshold, (int)g_state);
+    } else {
+      Serial.printf("[AUTO_QA] Voice trigger abs=%d zcr=%u ratio=%.2f threshold=%d state=%d\n",
+                    frameAbs, (unsigned)zcr, peakToAvg, threshold, (int)g_state);
+    }
     resetAutoQaDetector();
     if (g_state == STATE_INTERRUPT_QA) {
       startQaInterrupt("vad_barge_in");
@@ -1887,6 +2085,7 @@ void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
   if (type == WStype_DISCONNECTED) {
     g_wsConnected = false;
     g_wsActiveOutputUtteranceId = "";
+    g_latencyAwaitT5 = false;
     Serial.println("[WS] Disconnected");
     return;
   }
@@ -1907,7 +2106,7 @@ void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
     }
 
     if (offset < length) {
-      if (!enqueueAudioBytes(payload + offset, length - offset)) {
+      if (!enqueueAudioBytes(payload + offset, length - offset, AUDIO_OUT_ENQUEUE_TIMEOUT_MS, true)) {
         Serial.println("[AUDIO] ws enqueue failed");
       }
     }
@@ -1958,11 +2157,13 @@ void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
       if (cancelledUtterance == g_wsActiveOutputUtteranceId) {
         g_wsActiveOutputUtteranceId = "";
         g_wsTtsStartMs = 0;
+        g_latencyAwaitT5 = false;
       }
     } else {
       Serial.println("[WS] OUTPUT_CANCELLED");
       g_wsActiveOutputUtteranceId = "";
       g_wsTtsStartMs = 0;
+      g_latencyAwaitT5 = false;
     }
     return;
   }
@@ -2030,11 +2231,15 @@ void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
     g_wsTtsEnd = false;
     g_wsDropBinaryAudio = false;
     g_wsTtsStartMs = millis();
+    g_latencyAwaitT5 = true;
     resetAutoQaDetector();
     Serial.printf("[WS] TTS_START mime=%s bytes=%d timeoutMs=%lu\n",
                   mimeType.c_str(),
                   audioBytesLen,
                   (unsigned long)g_qaTtsWaitTimeoutMs);
+    Serial.printf("[LATENCY][T5_WAIT] utteranceSeq=%lu ttsStartRecvMillis=%lu\n",
+                  (unsigned long)g_latencyUtteranceSeq,
+                  (unsigned long)millis());
     return;
   }
 
@@ -2052,6 +2257,7 @@ void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
       g_wsActiveOutputUtteranceId = "";
     }
     g_wsTtsStartMs = 0;
+    g_latencyAwaitT5 = false;
     g_wsTtsEnd = true;
     Serial.println("[WS] TTS_END");
     return;
@@ -2100,6 +2306,9 @@ bool sendWsHello() {
 
 bool sendWsAudioStart() {
   g_qaUtteranceId = String("utt-") + String(++g_qaUtteranceSeq);
+  g_latencyT1Ms = 0;
+  g_latencyAwaitT5 = false;
+  g_latencyUtteranceSeq = g_qaUtteranceSeq;
 
   DynamicJsonDocument doc(384);
   doc["type"] = "AUDIO_START";
@@ -2163,6 +2372,7 @@ void finishQaInterrupt(bool success, const char* reason) {
   g_qaRecordStartMs = 0;
   resetQaCaptureState();
   g_wsDropBinaryAudio = false;
+  g_latencyAwaitT5 = false;
   g_lastQaFinishMs = millis();
   resetAutoQaDetector();
 
@@ -2187,6 +2397,7 @@ void startQaInterrupt(const char* trigger) {
   if (g_state == STATE_INTERRUPT_QA && !restartFromQaTts) {
     return;
   }
+  g_latencyAwaitT5 = false;
 
   if (!restartFromQaTts) {
     g_resumeStateAfterQa = shouldResumeStoryAfterQa() ? STATE_STORY_PLAYING : STATE_IDLE;
@@ -2619,28 +2830,73 @@ void onReminderCreate(const String& reminderId) {
   }
 
   preemptForReminderPriority();
-  setStatusColor(ST77XX_BLUE);
-  showTextOnTft(String("Reminder\n") + reminderId);
-
-  PlaybackResponse res = getReminderExecuteAudio(reminderId);
-  if (!res.ok) {
-    Serial.printf("[CMD] REMINDER_CREATE failed status=%d reminderId=%s\n", res.httpCode, reminderId.c_str());
-    setStatusColor(ST77XX_RED);
-    showTextOnTft("Reminder audio failed");
-    return;
-  }
-
-  if (res.interrupted || g_state == STATE_INTERRUPT_QA) {
-    if (g_stopRequested) {
-      Serial.printf("[CMD] REMINDER_CREATE interrupted by STOP reminderId=%s\n", reminderId.c_str());
-    } else {
-      Serial.printf("[CMD] REMINDER_CREATE interrupted by QA reminderId=%s\n", reminderId.c_str());
+  bool playedAtLeastOne = false;
+  for (uint8_t attempt = 1; attempt <= REMINDER_REPEAT_COUNT; attempt++) {
+    if (g_stopRequested || g_state == STATE_INTERRUPT_QA) {
+      break;
     }
-    return;
+
+    showTextOnTft(String("Reminder ") + attempt + "/" + REMINDER_REPEAT_COUNT + "\n" + reminderId);
+    startReminderBlink();
+    PlaybackResponse res = getReminderExecuteAudio(reminderId);
+    stopReminderBlink();
+
+    if (!res.ok) {
+      Serial.printf("[CMD] REMINDER_CREATE attempt=%u/%u failed status=%d reminderId=%s\n",
+                    (unsigned)attempt,
+                    (unsigned)REMINDER_REPEAT_COUNT,
+                    res.httpCode,
+                    reminderId.c_str());
+      if (attempt == REMINDER_REPEAT_COUNT) {
+        setStatusColor(ST77XX_RED);
+        showTextOnTft("Reminder audio failed");
+      }
+    } else {
+      playedAtLeastOne = true;
+      Serial.printf("[CMD] REMINDER_CREATE attempt=%u/%u played status=%d bytes=%d mime=%s sr=%d ch=%d\n",
+                    (unsigned)attempt,
+                    (unsigned)REMINDER_REPEAT_COUNT,
+                    res.httpCode,
+                    res.bytesLength,
+                    res.mimeType.c_str(),
+                    res.sampleRate,
+                    res.channels);
+    }
+
+    if (res.interrupted || g_state == STATE_INTERRUPT_QA || g_stopRequested) {
+      if (g_stopRequested) {
+        Serial.printf("[CMD] REMINDER_CREATE interrupted by STOP reminderId=%s\n", reminderId.c_str());
+      } else {
+        Serial.printf("[CMD] REMINDER_CREATE interrupted by QA reminderId=%s\n", reminderId.c_str());
+      }
+      return;
+    }
+
+    if (attempt < REMINDER_REPEAT_COUNT) {
+      Serial.printf("[CMD] REMINDER_CREATE wait next replay %lums (attempt %u/%u)\n",
+                    (unsigned long)REMINDER_REPEAT_INTERVAL_MS,
+                    (unsigned)attempt,
+                    (unsigned)REMINDER_REPEAT_COUNT);
+      unsigned long waitStart = millis();
+      while ((millis() - waitStart) < REMINDER_REPEAT_INTERVAL_MS) {
+        if (g_stopRequested || g_state == STATE_INTERRUPT_QA) {
+          if (g_stopRequested) {
+            Serial.printf("[CMD] REMINDER_CREATE wait interrupted by STOP reminderId=%s\n", reminderId.c_str());
+          } else {
+            Serial.printf("[CMD] REMINDER_CREATE wait interrupted by QA reminderId=%s\n", reminderId.c_str());
+          }
+          return;
+        }
+        pumpUiAndControlDuringBlockingWork();
+        delay(10);
+      }
+    }
   }
 
-  Serial.printf("[CMD] REMINDER_CREATE played status=%d bytes=%d mime=%s sr=%d ch=%d\n",
-                res.httpCode, res.bytesLength, res.mimeType.c_str(), res.sampleRate, res.channels);
+  if (playedAtLeastOne) {
+    applyStatusLedByState();
+    showTextOnTft(String("Reminder done\n") + reminderId);
+  }
 }
 
 void onReminderCancel(const String& reminderId) {
@@ -2868,10 +3124,21 @@ void tickInterruptQa() {
       bool endBySilence = (utterMs >= QA_MIN_UTTERANCE_MS) && (silenceMs >= QA_END_SILENCE_MS);
       bool endByMaxLen = utterMs >= QA_MAX_UTTERANCE_MS;
       if (endBySilence || endByMaxLen) {
+        unsigned long t1Ms = millis();
         if (!sendWsAudioEnd()) {
           finishQaInterrupt(false, "qa_audio_end_send_fail");
           return;
         }
+        g_latencyT1Ms = t1Ms;
+        g_latencyAwaitT5 = false;
+        g_latencyUtteranceSeq = g_qaUtteranceSeq;
+        Serial.printf("[LATENCY][T1] utteranceSeq=%lu t1Millis=%lu reason=%s utterMs=%lu silenceMs=%lu sentBytes=%u\n",
+                      (unsigned long)g_latencyUtteranceSeq,
+                      t1Ms,
+                      endBySilence ? "vad_silence" : "max_len",
+                      utterMs,
+                      silenceMs,
+                      (unsigned)g_qaSentAudioBytes);
         Serial.printf("[QA] Speech ended utterMs=%lu silenceMs=%lu sentBytes=%u\n",
                       utterMs, silenceMs, (unsigned)g_qaSentAudioBytes);
         g_wsTtsEnd = false;
