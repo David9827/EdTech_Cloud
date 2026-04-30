@@ -2,7 +2,9 @@ package com.java.edtech.api.user;
 
 import java.util.List;
 
+import com.java.edtech.api.child.dto.CreateChildRequest;
 import com.java.edtech.api.child.dto.ChildResponse;
+import com.java.edtech.api.robot.dto.CreateRobotRequest;
 import com.java.edtech.api.user.dto.ChangePasswordRequest;
 import com.java.edtech.api.user.dto.DeleteAccountRequest;
 import com.java.edtech.api.user.dto.UpdateAvatarRequest;
@@ -18,6 +20,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -42,10 +45,26 @@ public class UserController {
         return ResponseEntity.ok(UserApiResponse.ok("User robots fetched", response));
     }
 
+    @PostMapping("/me/robots")
+    public ResponseEntity<UserApiResponse<RobotSummaryResponse>> createMyRobot(
+            @Valid @RequestBody CreateRobotRequest request
+    ) {
+        RobotSummaryResponse response = robotService.createMyRobot(request);
+        return ResponseEntity.ok(UserApiResponse.ok("Robot created", response));
+    }
+
     @GetMapping("/me/children")
     public ResponseEntity<UserApiResponse<List<ChildResponse>>> getMyChildren() {
         List<ChildResponse> response = childService.getMyChildren();
         return ResponseEntity.ok(UserApiResponse.ok("User children fetched", response));
+    }
+
+    @PostMapping("/me/children")
+    public ResponseEntity<UserApiResponse<ChildResponse>> createMyChild(
+            @Valid @RequestBody CreateChildRequest request
+    ) {
+        ChildResponse response = childService.createMyChild(request);
+        return ResponseEntity.ok(UserApiResponse.ok("Child created", response));
     }
 
     @PatchMapping("/me/avatar")
