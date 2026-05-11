@@ -9,7 +9,6 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
-#include <TFT_22_ILI9225.h>
 
 /*
   ============================================================
@@ -31,22 +30,20 @@
   ============================================================
 */
 
-// ========================= 1) USER CONFIG =========================
+// ========================= 1 USER CONFIG =========================
 static const char* WIFI_SSID = "cong";
 static const char* WIFI_PASS = "27042004";
 
-// Example: "http://192.168.1.20:8080"
 static const char* BACKEND_BASE_URL = "http://172.20.10.3:5999";
 
 // Robot identity from backend DB
 static const char* ROBOT_ID = "4f864132-2c3f-4fff-9811-19a840e93473";
-static const char* SESSION_ID = "10000000-0000-0000-0000-000000000001"; // WS session id should be UUID.
+static const char* SESSION_ID = "10000000-0000-0000-0000-000000000001";
 
-// Optional WS QA endpoint (not used by polling flow yet)
+// Optional WS QA endpoint
 static const char* WS_HOST = "172.20.10.3";
 static const uint16_t WS_PORT = 5999;
 
-// Optional Bearer token. Keep empty if backend does not require auth.
 static const char* AUTH_BEARER_TOKEN = "";
 
 // Timeouts (ms)
@@ -128,12 +125,12 @@ static const float AEC_ADAPT_RATE = 0.18f;
 static const int AEC_ADAPT_MIN_REF_ABS = 110;
 static const float AEC_MAX_ECHO_GAIN = 1.6f;
 static const bool TFT_THROTTLE_UI_FOR_AUDIO = true;
-static const uint32_t TFT_UI_FRAME_MIN_INTERVAL_MS = 120;
+static const uint32_t TFT_UI_FRAME_MIN_INTERVAL_MS = 85;
 // ILI9225 native is 176x220. We use landscape (orientation=1) to keep old UI layout.
 static const int TFT_SCREEN_W = 220;
 static const int TFT_SCREEN_H = 176;
 
-// ========================= 1.1) PIN MAP (from robot_example.ino) =========================
+// ========================= 1.1 PIN MAP  =========================
 #define I2S_MIC_WS 6
 #define I2S_MIC_SCK 5
 #define I2S_MIC_SD 4
@@ -148,7 +145,7 @@ static const int TFT_SCREEN_H = 176;
 #define TFT_RS 13
 #define TFT_CS 14
 #define TFT_LED 0
-// Keep existing code paths compatible with old symbol names.
+
 #define TFT_DC TFT_RS
 #define TFT_BLK TFT_LED
 
@@ -159,7 +156,7 @@ static const int TFT_SCREEN_H = 176;
 static const bool BOOT_BUTTON_ACTIVE_LOW = true;
 static const bool BOOT_BUTTON_TOGGLE_ENABLED = false; // Use Serial 'B'/'b' only.
 
-// ========================= 2) APP STATE =========================
+// ========================= 2 APP STATE =========================
 enum RobotState {
   STATE_IDLE = 0,
   STATE_STORY_PLAYING = 1,
@@ -230,6 +227,11 @@ const EyeFrame kIdleEyeFrames[] = {
 bool g_eyeAnimActive = false;
 uint8_t g_eyeFrameIndex = 0;
 unsigned long g_eyeFrameStartMs = 0;
+bool g_eyeRenderCacheValid = false;
+int g_eyeRenderX1 = 0;
+int g_eyeRenderY1 = 0;
+int g_eyeRenderX2 = 0;
+int g_eyeRenderY2 = 0;
 bool g_listeningFaceShown = false;
 bool g_neutralFaceShown = false;
 uint8_t g_listeningBrowPhase = 0;
@@ -505,11 +507,16 @@ void tftDrawMultilineText(int x, int y, const String& text, uint16_t color) {
   }
 }
 
+void resetEyeRenderCache() {
+  g_eyeRenderCacheValid = false;
+}
+
 void showTextOnTft(const String& message, uint16_t color = ST77XX_WHITE) {
   if (!g_tftReady || !g_textUiEnabled) {
     return;
   }
 
+  resetEyeRenderCache();
   g_eyeAnimActive = false;
   g_lastUiTextMs = millis();
   tftFillScreen(ST77XX_BLACK);
@@ -521,6 +528,7 @@ void showWifiStatusOnTft(const String& message, uint16_t color = ST77XX_WHITE) {
     return;
   }
 
+  resetEyeRenderCache();
   tftFillScreen(ST77XX_BLACK);
   tftDrawMultilineText(2, 24, message, color);
 }
@@ -539,6 +547,7 @@ void onFirstWifiConnected() {
   const unsigned long now = millis();
   g_lastUiTextMs = (now > EYE_TEXT_HOLD_MS) ? (now - EYE_TEXT_HOLD_MS) : 0;
   if (g_tftReady) {
+    resetEyeRenderCache();
     tftFillScreen(EYE_BG_COLOR);
   }
 }
@@ -573,6 +582,49 @@ void drawRobotEyebrows(int leftX, int rightX, int eyeWidth, int eyeTopY, int bro
   }
 }
 
+void computeEyeRenderBounds(int leftX,
+                            int rightX,
+                            int eyeWidth,
+                            int y,
+                            int height,
+                            int browLift,
+                            int browTilt,
+                            bool isHappy,
+                            int& outX1,
+                            int& outY1,
+                            int& outX2,
+                            int& outY2) {
+  int lift = browLift;
+  int tilt = browTilt;
+  if (lift < -4) {
+    lift = -4;
+  } else if (lift > 8) {
+    lift = 8;
+  }
+  if (tilt < -8) {
+    tilt = -8;
+  } else if (tilt > 8) {
+    tilt = 8;
+  }
+  if (isHappy && tilt > 0) {
+    tilt = 0;
+  }
+
+  int browBaseY = y - 18 - lift;
+  int browTopY = browBaseY + (tilt < 0 ? tilt : 0);
+  int browBottomY = browBaseY + 3 + (tilt > 0 ? tilt : 0);
+
+  int eyeBottomY = y + height - 1;
+  if (isHappy) {
+    eyeBottomY += 28;
+  }
+
+  outX1 = leftX - 10;
+  outX2 = rightX + eyeWidth + 10;
+  outY1 = browTopY - 4;
+  outY2 = (eyeBottomY > browBottomY ? eyeBottomY : browBottomY) + 4;
+}
+
 void drawRobotEyes(int offsetX, int offsetY, int height, bool isHappy, int browLift, int browTilt) {
   if (!g_tftReady) {
     return;
@@ -589,9 +641,23 @@ void drawRobotEyes(int offsetX, int offsetY, int height, bool isHappy, int browL
   const int leftX = EYE_LEFT_X_BASE + offsetX;
   const int rightX = EYE_RIGHT_X_BASE + offsetX;
   const int y = EYE_BASE_Y + offsetY + (normalHeight - height) / 2;
+  int newX1 = 0;
+  int newY1 = 0;
+  int newX2 = 0;
+  int newY2 = 0;
+  computeEyeRenderBounds(
+      leftX, rightX, eyeWidth, y, height, browLift, browTilt, isHappy,
+      newX1, newY1, newX2, newY2);
 
-  // Clear full eye band to avoid residual pixels on left/right edges.
-  tftFillRectXYWH(0, 12, TFT_SCREEN_W, 132, EYE_BG_COLOR);
+  if (g_eyeRenderCacheValid) {
+    int clearX1 = g_eyeRenderX1 < newX1 ? g_eyeRenderX1 : newX1;
+    int clearY1 = g_eyeRenderY1 < newY1 ? g_eyeRenderY1 : newY1;
+    int clearX2 = g_eyeRenderX2 > newX2 ? g_eyeRenderX2 : newX2;
+    int clearY2 = g_eyeRenderY2 > newY2 ? g_eyeRenderY2 : newY2;
+    tftFillRectXYWH(clearX1, clearY1, (clearX2 - clearX1 + 1), (clearY2 - clearY1 + 1), EYE_BG_COLOR);
+  } else {
+    tftFillRectXYWH(newX1, newY1, (newX2 - newX1 + 1), (newY2 - newY1 + 1), EYE_BG_COLOR);
+  }
 
   tftFillRoundRectCompat(leftX, y, eyeWidth, height, EYE_CORNER_RADIUS, EYE_COLOR);
   tftFillRoundRectCompat(rightX, y, eyeWidth, height, EYE_CORNER_RADIUS, EYE_COLOR);
@@ -602,6 +668,11 @@ void drawRobotEyes(int offsetX, int offsetY, int height, bool isHappy, int browL
   }
 
   drawRobotEyebrows(leftX, rightX, eyeWidth, y, browLift, browTilt, isHappy);
+  g_eyeRenderX1 = newX1;
+  g_eyeRenderY1 = newY1;
+  g_eyeRenderX2 = newX2;
+  g_eyeRenderY2 = newY2;
+  g_eyeRenderCacheValid = true;
 }
 
 void drawListeningEyes(uint8_t phase) {
@@ -1391,6 +1462,7 @@ void drawStatsOverlay(bool forceDraw) {
 void toggleStatsOverlay() {
   g_statsOverlayEnabled = !g_statsOverlayEnabled;
   g_statsLastDrawMs = 0;
+  resetEyeRenderCache();
 
   if (g_statsOverlayEnabled) {
     g_eyeAnimActive = false;
