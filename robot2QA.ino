@@ -40,7 +40,7 @@ static const char* BACKEND_BASE_URL = "http://172.20.10.3:5999";
 
 // Robot identity from backend DB
 static const char* ROBOT_ID = "4f864132-2c3f-4fff-9811-19a840e93473";
-static const char* SESSION_ID = "10000000-0000-0000-0000-000000000001"; // WS session id should be UUID.
+static const char* SESSION_ID = "10000000-0000-0000-0000-000000000001";  // WS session id should be UUID.
 
 // Optional WS QA endpoint (not used by polling flow yet)
 static const char* WS_HOST = "172.20.10.3";
@@ -58,7 +58,7 @@ static const uint32_t WIFI_CONNECT_ATTEMPT_MS = 15000;
 static const uint32_t WIFI_RETRY_COOLDOWN_MS = 4000;
 static const uint32_t QA_STEP_TIMEOUT_MS = 12000;
 static const uint32_t QA_WAIT_TTS_END_MS = 25000;
-static const int QA_MIC_CHUNK_BYTES = 640; // 20 ms at 16kHz mono 16-bit PCM
+static const int QA_MIC_CHUNK_BYTES = 640;  // 20 ms at 16kHz mono 16-bit PCM
 static const char* QA_AUDIO_FORMAT = "PCM_16BIT";
 static const int QA_WAV_HEADER_BYTES = 44;
 static const uint32_t QA_WAIT_SPEECH_TIMEOUT_MS = 4500;
@@ -111,7 +111,7 @@ static const char* AUDIO_PROMPT_NO_SPEECH = "/audio/no_speech.wav";
 static const char* AUDIO_PROMPT_START_SUCCESS = "/audio/start_success.wav";
 static const uint32_t STATS_REFRESH_MS = 800;
 static const uint32_t BOOT_BUTTON_DEBOUNCE_MS = 45;
-static const float AUDIO_OUTPUT_GAIN = 0.9f; // 1.0 = original volume
+static const float AUDIO_OUTPUT_GAIN = 0.9f;  // 1.0 = original volume
 static const uint32_t COMMAND_PULL_INTERVAL_MS = 1000;
 static const uint8_t COMMAND_QUEUE_DEPTH = 8;
 static const uint32_t AUTO_QA_SPEAKER_GUARD_MS = 900;
@@ -122,8 +122,8 @@ static const uint8_t REMINDER_REPEAT_COUNT = 3;
 static const uint32_t REMINDER_REPEAT_INTERVAL_MS = 30000;
 static const uint32_t REMINDER_LED_BLINK_INTERVAL_MS = 240;
 static const bool AEC_ENABLED = true;
-static const uint16_t AEC_REF_RING_SAMPLES = 8192; // 16kHz domain ring for speaker reference.
-static const uint16_t AEC_PATH_DELAY_SAMPLES = 220; // ~13.7 ms at 16kHz, tune per enclosure.
+static const uint16_t AEC_REF_RING_SAMPLES = 8192;   // 16kHz domain ring for speaker reference.
+static const uint16_t AEC_PATH_DELAY_SAMPLES = 220;  // ~13.7 ms at 16kHz, tune per enclosure.
 static const float AEC_ADAPT_RATE = 0.18f;
 static const int AEC_ADAPT_MIN_REF_ABS = 110;
 static const float AEC_MAX_ECHO_GAIN = 1.6f;
@@ -149,7 +149,6 @@ static const int TFT_SCREEN_H = 176;
 #define TFT_CS 14
 #define TFT_LED 0
 // Keep existing code paths compatible with old symbol names.
-#define TFT_DC TFT_RS
 #define TFT_BLK TFT_LED
 
 #define LED_R 47
@@ -157,21 +156,19 @@ static const int TFT_SCREEN_H = 176;
 #define LED_B 21
 #define BOOT_BUTTON_PIN 0
 static const bool BOOT_BUTTON_ACTIVE_LOW = true;
-static const bool BOOT_BUTTON_TOGGLE_ENABLED = false; // Use Serial 'B'/'b' only.
+static const bool BOOT_BUTTON_TOGGLE_ENABLED = false;  // Use Serial 'B'/'b' only.
 
 // ========================= 2) APP STATE =========================
-enum RobotState {
-  STATE_IDLE = 0,
-  STATE_STORY_PLAYING = 1,
-  STATE_INTERRUPT_QA = 2
-};
+enum RobotState { STATE_IDLE = 0, STATE_STORY_PLAYING = 1, STATE_INTERRUPT_QA = 2 };
 
 RobotState g_state = STATE_IDLE;
 RobotState g_resumeStateAfterQa = STATE_IDLE;
 
+// Story session state
 String g_currentStoryId;
 bool g_storyCompleted = false;
 
+// WiFi + UI state
 unsigned long g_lastWifiAttemptMs = 0;
 uint32_t g_wifiRetryCount = 0;
 bool g_wifiWasConnected = false;
@@ -184,12 +181,6 @@ bool g_wifiUiEnabled = true;
 bool g_hasEverWifiConnected = false;
 unsigned long g_lastFaceUiRenderMs = 0;
 
-static const uint16_t ST77XX_BLACK = COLOR_BLACK;
-static const uint16_t ST77XX_WHITE = COLOR_WHITE;
-static const uint16_t ST77XX_BLUE = COLOR_BLUE;
-static const uint16_t ST77XX_GREEN = COLOR_GREEN;
-static const uint16_t ST77XX_RED = COLOR_RED;
-static const uint16_t ST77XX_CYAN = COLOR_CYAN;
 static const uint16_t EYE_COLOR = COLOR_CYAN;
 static const uint16_t EYE_BG_COLOR = COLOR_BLACK;
 static const uint16_t EYE_TEXT_HOLD_MS = 1200;
@@ -214,18 +205,10 @@ struct EyeFrame {
 };
 
 const EyeFrame kIdleEyeFrames[] = {
-  {0, 0, 90, false, 0, 2, 1800},
-  {0, 0, 10, false, 3, 0, 140},
-  {0, 0, 90, false, 1, 3, 750},
-  {-25, 0, 90, false, 2, 3, 950},
-  {25, 0, 90, false, 2, 3, 950},
-  {0, 0, 90, false, 0, 2, 500},
-  {0, 0, 10, false, 3, 0, 100},
-  {0, 0, 90, false, 1, 2, 100},
-  {0, 0, 10, false, 3, 0, 100},
-  {0, 0, 90, false, 0, 2, 500},
-  {0, 0, 90, true, 4, -1, 1800}
-};
+    {0, 0, 90, false, 0, 2, 1800},  {0, 0, 10, false, 3, 0, 140},  {0, 0, 90, false, 1, 3, 750},
+    {-25, 0, 90, false, 2, 3, 950}, {25, 0, 90, false, 2, 3, 950}, {0, 0, 90, false, 0, 2, 500},
+    {0, 0, 10, false, 3, 0, 100},   {0, 0, 90, false, 1, 2, 100},  {0, 0, 10, false, 3, 0, 100},
+    {0, 0, 90, false, 0, 2, 500},   {0, 0, 90, true, 4, -1, 1800}};
 
 bool g_eyeAnimActive = false;
 uint8_t g_eyeFrameIndex = 0;
@@ -255,6 +238,7 @@ unsigned long g_qaRecordStartMs = 0;
 uint32_t g_qaUtteranceSeq = 0;
 String g_qaUtteranceId;
 
+// WebSocket QA session state
 WebSocketsClient g_ws;
 bool g_wsInitialized = false;
 bool g_wsConnected = false;
@@ -274,6 +258,7 @@ volatile unsigned long g_latencyT1Ms = 0;
 volatile bool g_latencyAwaitT5 = false;
 volatile uint32_t g_latencyUtteranceSeq = 0;
 
+// QA microphone capture + VAD state
 bool g_qaSpeechStarted = false;
 unsigned long g_qaSpeechStartMs = 0;
 unsigned long g_qaLastSpeechMs = 0;
@@ -287,6 +272,7 @@ uint8_t g_qaPreRollCount = 0;
 bool g_wsDropBinaryAudio = false;
 volatile bool g_stopRequested = false;
 
+// Auto QA detector + local prompt/UI controls
 float g_autoQaNoiseEma = 300.0f;
 uint8_t g_autoQaSpeechHits = 0;
 unsigned long g_lastQaFinishMs = 0;
@@ -318,11 +304,11 @@ TaskHandle_t g_audioOutTaskHandle = nullptr;
 QueueHandle_t g_commandQueue = nullptr;
 TaskHandle_t g_commandPullTaskHandle = nullptr;
 
-// ========================= 3) DATA MODELS =========================
+// ========================= 3) DATA MODELS + DECLARATIONS =========================
 struct PulledCommand {
   bool hasCommand = false;
   String commandId;
-  String type;      // START_STORY, STOP_STORY, REMINDER_CREATE, ...
+  String type;  // START_STORY, STOP_STORY, REMINDER_CREATE, ...
   String storyId;
   String reminderId;
 };
@@ -347,32 +333,48 @@ struct PlaybackResponse {
   int bytesLength = 0;
 };
 
+// ----- Command + backend -----
 bool pullCommandFromServer(PulledCommand& outCmd);
 void executeCommand(const PulledCommand& cmd);
 PlaybackResponse getReminderExecuteAudio(const String& reminderId);
 void preemptForReminderPriority();
+bool callStopPlayback();
+
+// ----- QA/WS flow -----
 bool isCurrentQaUtterance(const DynamicJsonDocument& doc);
+bool shouldAbortCurrentOutput();
+void startQaInterrupt(const char* trigger);
+bool sendWsAudioStart();
+bool sendWsAudioEnd();
+void finishQaInterrupt(bool success, const char* reason);
+void restartQaListeningAfterNoSpeech(const char* reasonTag);
+bool isWsNoSpeechError();
+void waitWithWsPump(uint32_t waitMs);
+uint32_t estimateWavPromptDurationMs(const char* path);
+void resetQaSessionState();
+
+// ----- Face + TFT -----
 void drawRobotEyebrows(int leftX, int rightX, int eyeWidth, int eyeTopY, int browLift, int browTilt, bool isHappy);
 void drawRobotEyes(int offsetX, int offsetY, int height, bool isHappy, int browLift = 0, int browTilt = 2);
 void drawListeningEyes(uint8_t phase);
 void tickEyeAnimation();
 void tickFaceUi();
 void maybeTickFaceUi();
-void pumpUiAndControlDuringBlockingWork();
+void tftFillScreen(uint16_t color);
+void tftFillRectXYWH(int x, int y, int w, int h, uint16_t color);
+void tftFillRoundRectCompat(int x, int y, int w, int h, int radius, uint16_t color);
+void tftDrawTextLine(int x, int y, const char* text, uint16_t color);
+void tftDrawMultilineText(int x, int y, const String& text, uint16_t color);
+
+// ----- Local audio prompts + speaker output -----
 void initSpiffsStorage();
 bool playWavPromptFromSpiffs(const char* path, bool allowAbort);
 void playCantConnectWifiPrompt();
 bool playNoSpeechPrompt();
 void playStartSuccessPrompt();
-bool shouldAbortCurrentOutput();
-void startQaInterrupt(const char* trigger);
-bool sendWsAudioStart();
-bool sendWsAudioEnd();
-void finishQaInterrupt(bool success, const char* reason);
-uint32_t estimateWavPromptDurationMs(const char* path);
-void waitWithWsPump(uint32_t waitMs);
-void restartQaListeningAfterNoSpeech(const char* reasonTag);
-bool isWsNoSpeechError();
+
+// ----- Runtime controls -----
+void pumpUiAndControlDuringBlockingWork();
 void initBootButtonToggle();
 void tickBootButtonToggle();
 void toggleStatsOverlay();
@@ -386,11 +388,6 @@ void stopReminderBlink();
 void tickReminderBlink();
 void aecPushSpeakerReference(const uint8_t* data, size_t bytesLen);
 void applyAecToMicFrame(uint8_t* data, size_t bytesLen);
-void tftFillScreen(uint16_t color);
-void tftFillRectXYWH(int x, int y, int w, int h, uint16_t color);
-void tftFillRoundRectCompat(int x, int y, int w, int h, int radius, uint16_t color);
-void tftDrawTextLine(int x, int y, const char* text, uint16_t color);
-void tftDrawMultilineText(int x, int y, const String& text, uint16_t color);
 
 // ========================= 4) HW INIT + UI =========================
 void setStatusLed(bool r, bool g, bool b) {
@@ -399,13 +396,9 @@ void setStatusLed(bool r, bool g, bool b) {
   digitalWrite(LED_B, b ? HIGH : LOW);
 }
 
-void setStatusColor(uint16_t color) {
-  setStatusLed(color == ST77XX_RED, color == ST77XX_GREEN, color == ST77XX_BLUE);
-}
+void setStatusColor(uint16_t color) { setStatusLed(color == ST77XX_RED, color == ST77XX_GREEN, color == ST77XX_BLUE); }
 
-void tftFillScreen(uint16_t color) {
-  g_tft.fillRectangle(0, 0, TFT_SCREEN_W - 1, TFT_SCREEN_H - 1, color);
-}
+void tftFillScreen(uint16_t color) { g_tft.fillRectangle(0, 0, TFT_SCREEN_W - 1, TFT_SCREEN_H - 1, color); }
 
 void tftFillRectXYWH(int x, int y, int w, int h, uint16_t color) {
   if (w <= 0 || h <= 0) {
@@ -421,10 +414,14 @@ void tftFillRectXYWH(int x, int y, int w, int h, uint16_t color) {
     return;
   }
 
-  if (x1 < 0) x1 = 0;
-  if (y1 < 0) y1 = 0;
-  if (x2 >= TFT_SCREEN_W) x2 = TFT_SCREEN_W - 1;
-  if (y2 >= TFT_SCREEN_H) y2 = TFT_SCREEN_H - 1;
+  if (x1 < 0)
+    x1 = 0;
+  if (y1 < 0)
+    y1 = 0;
+  if (x2 >= TFT_SCREEN_W)
+    x2 = TFT_SCREEN_W - 1;
+  if (y2 >= TFT_SCREEN_H)
+    y2 = TFT_SCREEN_H - 1;
   g_tft.fillRectangle((uint16_t)x1, (uint16_t)y1, (uint16_t)x2, (uint16_t)y2, color);
 }
 
@@ -510,9 +507,7 @@ void tftDrawMultilineText(int x, int y, const String& text, uint16_t color) {
   }
 }
 
-void resetEyeRenderCache() {
-  g_eyeRenderCacheValid = false;
-}
+void resetEyeRenderCache() { g_eyeRenderCacheValid = false; }
 
 void showTextOnTft(const String& message, uint16_t color = ST77XX_WHITE) {
   if (!g_tftReady || !g_textUiEnabled) {
@@ -585,18 +580,8 @@ void drawRobotEyebrows(int leftX, int rightX, int eyeWidth, int eyeTopY, int bro
   }
 }
 
-void computeEyeRenderBounds(int leftX,
-                            int rightX,
-                            int eyeWidth,
-                            int y,
-                            int height,
-                            int browLift,
-                            int browTilt,
-                            bool isHappy,
-                            int& outX1,
-                            int& outY1,
-                            int& outX2,
-                            int& outY2) {
+void computeEyeRenderBounds(int leftX, int rightX, int eyeWidth, int y, int height, int browLift, int browTilt,
+                            bool isHappy, int& outX1, int& outY1, int& outX2, int& outY2) {
   int lift = browLift;
   int tilt = browTilt;
   if (lift < -4) {
@@ -648,9 +633,7 @@ void drawRobotEyes(int offsetX, int offsetY, int height, bool isHappy, int browL
   int newY1 = 0;
   int newX2 = 0;
   int newY2 = 0;
-  computeEyeRenderBounds(
-      leftX, rightX, eyeWidth, y, height, browLift, browTilt, isHappy,
-      newX1, newY1, newX2, newY2);
+  computeEyeRenderBounds(leftX, rightX, eyeWidth, y, height, browLift, browTilt, isHappy, newX1, newY1, newX2, newY2);
 
   if (g_eyeRenderCacheValid) {
     int clearX1 = g_eyeRenderX1 < newX1 ? g_eyeRenderX1 : newX1;
@@ -720,7 +703,8 @@ void tickEyeAnimation() {
   g_eyeFrameStartMs = now;
 
   const EyeFrame& nextFrame = kIdleEyeFrames[g_eyeFrameIndex];
-  drawRobotEyes(nextFrame.offsetX, nextFrame.offsetY, nextFrame.height, nextFrame.isHappy, nextFrame.browLift, nextFrame.browTilt);
+  drawRobotEyes(nextFrame.offsetX, nextFrame.offsetY, nextFrame.height, nextFrame.isHappy, nextFrame.browLift,
+                nextFrame.browTilt);
 }
 
 void tickFaceUi() {
@@ -891,11 +875,30 @@ String buildUrl(const String& path) {
   return url + path;
 }
 
-void addJsonHeaders(HTTPClient& http) {
-  http.addHeader("Content-Type", "application/json");
+void addJsonHeaders(HTTPClient& http) { http.addHeader("Content-Type", "application/json"); }
+
+void addAuthHeader(HTTPClient& http) {
   if (strlen(AUTH_BEARER_TOKEN) > 0) {
     http.addHeader("Authorization", String("Bearer ") + AUTH_BEARER_TOKEN);
   }
+}
+
+static bool beginBackendHttp(HTTPClient& http, const String& url, const char* logTag, bool addJsonHeader,
+                             bool wantAuthHeader) {
+  if (!http.begin(url)) {
+    Serial.printf("[%s] http.begin failed\n", logTag);
+    return false;
+  }
+
+  http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
+  http.setTimeout(HTTP_READ_TIMEOUT_MS);
+  if (addJsonHeader) {
+    addJsonHeaders(http);
+  }
+  if (wantAuthHeader) {
+    addAuthHeader(http);
+  }
+  return true;
 }
 
 void printState(const char* reason) {
@@ -983,9 +986,7 @@ void pumpUiAndControlDuringBlockingWork() {
 }
 
 // ========================= 5.1) AUDIO OUTPUT PIPELINE =========================
-void markSpeakerAudioActivity() {
-  g_lastSpeakerAudioMs = millis();
-}
+void markSpeakerAudioActivity() { g_lastSpeakerAudioMs = millis(); }
 
 bool isSpeakerLikelyActive(uint32_t guardMs) {
   if (g_audioOutQueue != nullptr) {
@@ -1159,15 +1160,11 @@ void audioOutTask(void* pvParameters) {
         uint32_t utteranceSeq = g_latencyUtteranceSeq;
         g_latencyAwaitT5 = false;
         if (t1Ms > 0 && t5Ms >= t1Ms) {
-          Serial.printf("[LATENCY][T5] utteranceSeq=%lu t5Millis=%lu deltaMs=%lu\n",
-                        (unsigned long)utteranceSeq,
-                        t5Ms,
+          Serial.printf("[LATENCY][T5] utteranceSeq=%lu t5Millis=%lu deltaMs=%lu\n", (unsigned long)utteranceSeq, t5Ms,
                         t5Ms - t1Ms);
         } else {
           Serial.printf("[LATENCY][T5] utteranceSeq=%lu t5Millis=%lu deltaMs=NA t1Millis=%lu\n",
-                        (unsigned long)utteranceSeq,
-                        t5Ms,
-                        t1Ms);
+                        (unsigned long)utteranceSeq, t5Ms, t1Ms);
         }
       }
     }
@@ -1185,14 +1182,7 @@ void initAudioOutputPipeline() {
     return;
   }
 
-  BaseType_t ok = xTaskCreatePinnedToCore(
-      audioOutTask,
-      "audio_out",
-      4096,
-      nullptr,
-      1,
-      &g_audioOutTaskHandle,
-      1);
+  BaseType_t ok = xTaskCreatePinnedToCore(audioOutTask, "audio_out", 4096, nullptr, 1, &g_audioOutTaskHandle, 1);
 
   if (ok != pdPASS) {
     Serial.println("[AUDIO] task create failed");
@@ -1202,8 +1192,7 @@ void initAudioOutputPipeline() {
     return;
   }
 
-  Serial.printf("[AUDIO] queue ready depth=%u chunk=%u\n",
-                (unsigned)AUDIO_OUT_QUEUE_DEPTH,
+  Serial.printf("[AUDIO] queue ready depth=%u chunk=%u\n", (unsigned)AUDIO_OUT_QUEUE_DEPTH,
                 (unsigned)AUDIO_OUT_CHUNK_BYTES);
 }
 
@@ -1218,9 +1207,7 @@ void flushAudioOutputNow() {
   }
 }
 
-bool enqueueAudioBytes(const uint8_t* data,
-                       size_t bytesLen,
-                       uint32_t waitMs = AUDIO_OUT_ENQUEUE_TIMEOUT_MS,
+bool enqueueAudioBytes(const uint8_t* data, size_t bytesLen, uint32_t waitMs = AUDIO_OUT_ENQUEUE_TIMEOUT_MS,
                        bool fromWsTts = false) {
   if (data == nullptr || bytesLen == 0) {
     return true;
@@ -1264,8 +1251,7 @@ void initSpiffsStorage() {
 
   Serial.println("[SPIFFS] mounted");
   Serial.printf("[SPIFFS] prompts: wifi=%d no_speech=%d start=%d\n",
-                SPIFFS.exists(AUDIO_PROMPT_CANT_CONNECT_WIFI) ? 1 : 0,
-                SPIFFS.exists(AUDIO_PROMPT_NO_SPEECH) ? 1 : 0,
+                SPIFFS.exists(AUDIO_PROMPT_CANT_CONNECT_WIFI) ? 1 : 0, SPIFFS.exists(AUDIO_PROMPT_NO_SPEECH) ? 1 : 0,
                 SPIFFS.exists(AUDIO_PROMPT_START_SUCCESS) ? 1 : 0);
 }
 
@@ -1338,9 +1324,7 @@ void playCantConnectWifiPrompt() {
   playWavPromptFromSpiffs(AUDIO_PROMPT_CANT_CONNECT_WIFI, false);
 }
 
-bool playNoSpeechPrompt() {
-  return playWavPromptFromSpiffs(AUDIO_PROMPT_NO_SPEECH, false);
-}
+bool playNoSpeechPrompt() { return playWavPromptFromSpiffs(AUDIO_PROMPT_NO_SPEECH, false); }
 
 void playStartSuccessPrompt() {
   flushAudioOutputNow();
@@ -1416,17 +1400,13 @@ void drawStatsOverlay(bool forceDraw) {
   tftDrawTextLine(0, y, line, ST77XX_GREEN);
   y += TFT_FONT_LINE_H;
 
-  snprintf(line, sizeof(line), "RAM %lu/%luKB %lu%%",
-           (unsigned long)heapUsedKb,
-           (unsigned long)heapTotalKb,
+  snprintf(line, sizeof(line), "RAM %lu/%luKB %lu%%", (unsigned long)heapUsedKb, (unsigned long)heapTotalKb,
            (unsigned long)heapPct);
   tftDrawTextLine(0, y, line, ST77XX_GREEN);
   y += TFT_FONT_LINE_H;
 
   if (psTotalKb > 0) {
-    snprintf(line, sizeof(line), "PSRAM %lu/%luKB %lu%%",
-             (unsigned long)psUsedKb,
-             (unsigned long)psTotalKb,
+    snprintf(line, sizeof(line), "PSRAM %lu/%luKB %lu%%", (unsigned long)psUsedKb, (unsigned long)psTotalKb,
              (unsigned long)psPct);
   } else {
     snprintf(line, sizeof(line), "PSRAM N/A");
@@ -1435,9 +1415,7 @@ void drawStatsOverlay(bool forceDraw) {
   y += TFT_FONT_LINE_H;
 
   if (g_spiffsReady) {
-    snprintf(line, sizeof(line), "DISK %lu/%luKB %lu%%",
-             (unsigned long)diskUsedKb,
-             (unsigned long)diskTotalKb,
+    snprintf(line, sizeof(line), "DISK %lu/%luKB %lu%%", (unsigned long)diskUsedKb, (unsigned long)diskTotalKb,
              (unsigned long)diskPct);
   } else {
     snprintf(line, sizeof(line), "DISK SPIFFS N/A");
@@ -1445,16 +1423,11 @@ void drawStatsOverlay(bool forceDraw) {
   tftDrawTextLine(0, y, line, ST77XX_GREEN);
   y += TFT_FONT_LINE_H;
 
-  snprintf(line, sizeof(line), "UP %02lu:%02lu:%02lu",
-           (unsigned long)hh,
-           (unsigned long)mm,
-           (unsigned long)ss);
+  snprintf(line, sizeof(line), "UP %02lu:%02lu:%02lu", (unsigned long)hh, (unsigned long)mm, (unsigned long)ss);
   tftDrawTextLine(0, y, line, ST77XX_GREEN);
   y += TFT_FONT_LINE_H;
 
-  snprintf(line, sizeof(line), "STATE=%d QA=%d",
-           (int)g_state,
-           (int)g_qaStep);
+  snprintf(line, sizeof(line), "STATE=%d QA=%d", (int)g_state, (int)g_qaStep);
   tftDrawTextLine(0, y, line, ST77XX_GREEN);
   y += TFT_FONT_LINE_H;
 
@@ -1540,7 +1513,7 @@ uint32_t estimateWavPromptDurationMs(const char* path) {
   }
 
   size_t pcmBytes = bytes - (size_t)QA_WAV_HEADER_BYTES;
-  uint32_t bytesPerSec = (uint32_t)AUDIO_SAMPLE_RATE * 2U; // mono 16-bit PCM
+  uint32_t bytesPerSec = (uint32_t)AUDIO_SAMPLE_RATE * 2U;  // mono 16-bit PCM
   if (bytesPerSec == 0) {
     return 0;
   }
@@ -1654,14 +1627,7 @@ void initCommandPullWorker() {
     return;
   }
 
-  BaseType_t ok = xTaskCreatePinnedToCore(
-      commandPullTask,
-      "cmd_pull",
-      6144,
-      nullptr,
-      1,
-      &g_commandPullTaskHandle,
-      0);
+  BaseType_t ok = xTaskCreatePinnedToCore(commandPullTask, "cmd_pull", 6144, nullptr, 1, &g_commandPullTaskHandle, 0);
   if (ok != pdPASS) {
     Serial.println("[CMD] pull task create failed");
     vQueueDelete(g_commandQueue);
@@ -1693,14 +1659,22 @@ void processPendingCommands() {
 // ========================= 6) WIFI =========================
 const char* wifiStatusText(wl_status_t status) {
   switch (status) {
-    case WL_IDLE_STATUS: return "IDLE";
-    case WL_NO_SSID_AVAIL: return "NO_SSID";
-    case WL_SCAN_COMPLETED: return "SCAN_DONE";
-    case WL_CONNECTED: return "CONNECTED";
-    case WL_CONNECT_FAILED: return "CONNECT_FAILED";
-    case WL_CONNECTION_LOST: return "CONNECTION_LOST";
-    case WL_DISCONNECTED: return "DISCONNECTED";
-    default: return "UNKNOWN";
+    case WL_IDLE_STATUS:
+      return "IDLE";
+    case WL_NO_SSID_AVAIL:
+      return "NO_SSID";
+    case WL_SCAN_COMPLETED:
+      return "SCAN_DONE";
+    case WL_CONNECTED:
+      return "CONNECTED";
+    case WL_CONNECT_FAILED:
+      return "CONNECT_FAILED";
+    case WL_CONNECTION_LOST:
+      return "CONNECTION_LOST";
+    case WL_DISCONNECTED:
+      return "DISCONNECTED";
+    default:
+      return "UNKNOWN";
   }
 }
 
@@ -1725,7 +1699,8 @@ void printWifiScanHint() {
   if (found) {
     Serial.printf("[WIFI] SSID '%s' found. RSSI=%d dBm\n", WIFI_SSID, bestRssi);
   } else {
-    Serial.printf("[WIFI] SSID '%s' not found in scan (%d networks). Check 2.4GHz and SSID spelling.\n", WIFI_SSID, count);
+    Serial.printf("[WIFI] SSID '%s' not found in scan (%d networks). Check 2.4GHz and SSID spelling.\n", WIFI_SSID,
+                  count);
   }
 }
 
@@ -1787,18 +1762,7 @@ bool ensureWifiConnected() {
   return false;
 }
 
-// ========================= 6.5) WS QA FLOW =========================
-const char* qaStepText(QaStep step) {
-  switch (step) {
-    case QA_STEP_IDLE: return "IDLE";
-    case QA_STEP_WAIT_WS: return "WAIT_WS";
-    case QA_STEP_WAIT_HELLO_ACK: return "WAIT_HELLO_ACK";
-    case QA_STEP_WAIT_AUDIO_START_ACK: return "WAIT_AUDIO_START_ACK";
-    case QA_STEP_STREAM_MIC: return "STREAM_MIC";
-    case QA_STEP_WAIT_TTS_END: return "WAIT_TTS_END";
-    default: return "UNKNOWN";
-  }
-}
+// ========================= 6.5) QA CAPTURE + DETECTION HELPERS =========================
 
 void resetQaWsFlags() {
   g_wsHelloAck = false;
@@ -1829,11 +1793,13 @@ void resetQaCaptureState() {
   }
 }
 
-void analyzePcm16Frame(const uint8_t* data,
-                       size_t bytesLen,
-                       int& avgAbs,
-                       int& peakAbs,
-                       uint16_t& zcr,
+void resetQaSessionState() {
+  resetQaWsFlags();
+  resetQaCaptureState();
+  resetAutoQaDetector();
+}
+
+void analyzePcm16Frame(const uint8_t* data, size_t bytesLen, int& avgAbs, int& peakAbs, uint16_t& zcr,
                        float& peakToAvg) {
   avgAbs = 0;
   peakAbs = 0;
@@ -2060,11 +2026,11 @@ void tickAutoQaTrigger() {
 
   if (g_autoQaSpeechHits >= requiredHits) {
     if (storyBargeInMode && speakerActive) {
-      Serial.printf("[AUTO_QA] Voice trigger abs=%d refAbs=%d zcr=%u ratio=%.2f threshold=%d state=%d\n",
-                    frameAbs, refAbs, (unsigned)zcr, peakToAvg, threshold, (int)g_state);
+      Serial.printf("[AUTO_QA] Voice trigger abs=%d refAbs=%d zcr=%u ratio=%.2f threshold=%d state=%d\n", frameAbs,
+                    refAbs, (unsigned)zcr, peakToAvg, threshold, (int)g_state);
     } else {
-      Serial.printf("[AUTO_QA] Voice trigger abs=%d zcr=%u ratio=%.2f threshold=%d state=%d\n",
-                    frameAbs, (unsigned)zcr, peakToAvg, threshold, (int)g_state);
+      Serial.printf("[AUTO_QA] Voice trigger abs=%d zcr=%u ratio=%.2f threshold=%d state=%d\n", frameAbs, (unsigned)zcr,
+                    peakToAvg, threshold, (int)g_state);
     }
     resetAutoQaDetector();
     if (g_state == STATE_INTERRUPT_QA) {
@@ -2075,55 +2041,29 @@ void tickAutoQaTrigger() {
   }
 }
 
-void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
-  if (type == WStype_CONNECTED) {
-    g_wsConnected = true;
-    Serial.println("[WS] Connected /ws/robot");
+static void handleWsBinaryPayload(uint8_t* payload, size_t length) {
+  if (!g_i2sTxReady || length == 0) {
+    return;
+  }
+  if (g_state != STATE_INTERRUPT_QA || g_qaStep != QA_STEP_WAIT_TTS_END || g_wsDropBinaryAudio) {
     return;
   }
 
-  if (type == WStype_DISCONNECTED) {
-    g_wsConnected = false;
-    g_wsActiveOutputUtteranceId = "";
-    g_latencyAwaitT5 = false;
-    Serial.println("[WS] Disconnected");
-    return;
+  size_t offset = 0;
+  if (g_wsSkipAudioHeaderBytes > 0) {
+    size_t drop = length < (size_t)g_wsSkipAudioHeaderBytes ? length : (size_t)g_wsSkipAudioHeaderBytes;
+    g_wsSkipAudioHeaderBytes -= (int)drop;
+    offset = drop;
   }
 
-  if (type == WStype_BIN) {
-    if (!g_i2sTxReady || length == 0) {
-      return;
+  if (offset < length) {
+    if (!enqueueAudioBytes(payload + offset, length - offset, AUDIO_OUT_ENQUEUE_TIMEOUT_MS, true)) {
+      Serial.println("[AUDIO] ws enqueue failed");
     }
-    if (g_state != STATE_INTERRUPT_QA || g_qaStep != QA_STEP_WAIT_TTS_END || g_wsDropBinaryAudio) {
-      return;
-    }
-
-    size_t offset = 0;
-    if (g_wsSkipAudioHeaderBytes > 0) {
-      size_t drop = length < (size_t)g_wsSkipAudioHeaderBytes ? length : (size_t)g_wsSkipAudioHeaderBytes;
-      g_wsSkipAudioHeaderBytes -= (int)drop;
-      offset = drop;
-    }
-
-    if (offset < length) {
-      if (!enqueueAudioBytes(payload + offset, length - offset, AUDIO_OUT_ENQUEUE_TIMEOUT_MS, true)) {
-        Serial.println("[AUDIO] ws enqueue failed");
-      }
-    }
-    return;
   }
+}
 
-  if (type == WStype_ERROR) {
-    g_wsError = true;
-    g_wsErrorCode = "WS_CLIENT_ERROR";
-    g_wsErrorMessage = "Client WS error";
-    return;
-  }
-
-  if (type != WStype_TEXT) {
-    return;
-  }
-
+static void handleWsTextPayload(uint8_t* payload, size_t length) {
   DynamicJsonDocument doc(1024);
   DeserializationError err = deserializeJson(doc, payload, length);
   if (err) {
@@ -2150,8 +2090,8 @@ void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
 
   if (typeText == "OUTPUT_CANCELLED") {
     String cancelledUtterance = doc["cancelledUtteranceId"].isNull()
-                                  ? (doc["utteranceId"].isNull() ? "" : doc["utteranceId"].as<String>())
-                                  : doc["cancelledUtteranceId"].as<String>();
+                                    ? (doc["utteranceId"].isNull() ? "" : doc["utteranceId"].as<String>())
+                                    : doc["cancelledUtteranceId"].as<String>();
     if (cancelledUtterance.length() > 0) {
       Serial.printf("[WS] OUTPUT_CANCELLED utterance=%s\n", cancelledUtterance.c_str());
       if (cancelledUtterance == g_wsActiveOutputUtteranceId) {
@@ -2233,12 +2173,9 @@ void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
     g_wsTtsStartMs = millis();
     g_latencyAwaitT5 = true;
     resetAutoQaDetector();
-    Serial.printf("[WS] TTS_START mime=%s bytes=%d timeoutMs=%lu\n",
-                  mimeType.c_str(),
-                  audioBytesLen,
+    Serial.printf("[WS] TTS_START mime=%s bytes=%d timeoutMs=%lu\n", mimeType.c_str(), audioBytesLen,
                   (unsigned long)g_qaTtsWaitTimeoutMs);
-    Serial.printf("[LATENCY][T5_WAIT] utteranceSeq=%lu ttsStartRecvMillis=%lu\n",
-                  (unsigned long)g_latencyUtteranceSeq,
+    Serial.printf("[LATENCY][T5_WAIT] utteranceSeq=%lu ttsStartRecvMillis=%lu\n", (unsigned long)g_latencyUtteranceSeq,
                   (unsigned long)millis());
     return;
   }
@@ -2269,6 +2206,34 @@ void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
     g_wsErrorMessage = doc["errorMessage"].isNull() ? "Unknown WS error" : doc["errorMessage"].as<String>();
     Serial.printf("[WS] ERROR code=%s msg=%s\n", g_wsErrorCode.c_str(), g_wsErrorMessage.c_str());
     return;
+  }
+}
+
+void onWsEvent(WStype_t type, uint8_t* payload, size_t length) {
+  switch (type) {
+    case WStype_CONNECTED:
+      g_wsConnected = true;
+      Serial.println("[WS] Connected /ws/robot");
+      return;
+    case WStype_DISCONNECTED:
+      g_wsConnected = false;
+      g_wsActiveOutputUtteranceId = "";
+      g_latencyAwaitT5 = false;
+      Serial.println("[WS] Disconnected");
+      return;
+    case WStype_BIN:
+      handleWsBinaryPayload(payload, length);
+      return;
+    case WStype_ERROR:
+      g_wsError = true;
+      g_wsErrorCode = "WS_CLIENT_ERROR";
+      g_wsErrorMessage = "Client WS error";
+      return;
+    case WStype_TEXT:
+      handleWsTextPayload(payload, length);
+      return;
+    default:
+      return;
   }
 }
 
@@ -2409,9 +2374,7 @@ void startQaInterrupt(const char* trigger) {
   g_qaStep = QA_STEP_WAIT_WS;
   g_qaStepStartMs = millis();
   g_qaRecordStartMs = 0;
-  resetQaWsFlags();
-  resetQaCaptureState();
-  resetAutoQaDetector();
+  resetQaSessionState();
 
   if (restartFromQaTts) {
     bool cancelSent = false;
@@ -2441,15 +2404,8 @@ bool pullCommandFromServer(PulledCommand& outCmd) {
   HTTPClient http;
   String url = buildUrl(String("/api/robots/") + ROBOT_ID + "/commands/pull?consume=true");
 
-  if (!http.begin(url)) {
-    Serial.println("[CMD] http.begin failed");
+  if (!beginBackendHttp(http, url, "CMD", false, true)) {
     return false;
-  }
-
-  http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
-  http.setTimeout(HTTP_READ_TIMEOUT_MS);
-  if (strlen(AUTH_BEARER_TOKEN) > 0) {
-    http.addHeader("Authorization", String("Bearer ") + AUTH_BEARER_TOKEN);
   }
 
   int code = http.GET();
@@ -2499,14 +2455,9 @@ bool callStopPlayback() {
   HTTPClient http;
   String url = buildUrl("/api/stories/playback/stop");
 
-  if (!http.begin(url)) {
-    Serial.println("[PLAYBACK] stop begin failed");
+  if (!beginBackendHttp(http, url, "PLAYBACK", true, false)) {
     return false;
   }
-
-  http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
-  http.setTimeout(HTTP_READ_TIMEOUT_MS);
-  addJsonHeaders(http);
 
   DynamicJsonDocument req(256);
   req["robotId"] = ROBOT_ID;
@@ -2527,13 +2478,8 @@ bool callStopPlayback() {
   return true;
 }
 
-PlaybackResponse postPlaybackStart(const String& storyId);
-PlaybackResponse postPlaybackNext();
-
 // ========================= 8) AUDIO HANDLER (HW HOOK) =========================
-bool shouldAbortCurrentOutput() {
-  return (g_state == STATE_INTERRUPT_QA) || g_stopRequested;
-}
+bool shouldAbortCurrentOutput() { return (g_state == STATE_INTERRUPT_QA) || g_stopRequested; }
 
 bool playAudioChunk(WiFiClient& stream, int length, const String& mimeType, int sampleRate, int channels) {
   const int bufSize = 1024;
@@ -2568,8 +2514,8 @@ bool playAudioChunk(WiFiClient& stream, int length, const String& mimeType, int 
   }
 
   bool interrupted = shouldAbortCurrentOutput();
-  Serial.printf("[AUDIO] read=%d queued=%d mime=%s sr=%d ch=%d interrupted=%d enqueueFailed=%d\n",
-                length - remain, totalQueued, mimeType.c_str(), sampleRate, channels, (int)interrupted, (int)enqueueFailed);
+  Serial.printf("[AUDIO] read=%d queued=%d mime=%s sr=%d ch=%d interrupted=%d enqueueFailed=%d\n", length - remain,
+                totalQueued, mimeType.c_str(), sampleRate, channels, (int)interrupted, (int)enqueueFailed);
   return !interrupted && !enqueueFailed;
 }
 
@@ -2626,7 +2572,8 @@ PlaybackResponse parseAndPlayAudioResponse(HTTPClient& http, int code) {
       if (available > 0) {
         uint8_t tmp[512];
         int n = stream->readBytes(tmp, available > 512 ? 512 : available);
-        if (n <= 0) break;
+        if (n <= 0)
+          break;
         if (!enqueueAudioBytes(tmp, n)) {
           Serial.println("[AUDIO] enqueue failed during chunked stream");
           result.interrupted = true;
@@ -2638,8 +2585,8 @@ PlaybackResponse parseAndPlayAudioResponse(HTTPClient& http, int code) {
         delay(5);
       }
     }
-    Serial.printf("[AUDIO] chunked read=%d queued=%u interrupted=%d\n",
-                  result.bytesLength, (unsigned)totalQueued, (int)result.interrupted);
+    Serial.printf("[AUDIO] chunked read=%d queued=%u interrupted=%d\n", result.bytesLength, (unsigned)totalQueued,
+                  (int)result.interrupted);
   } else {
     consumeBody(http);
   }
@@ -2654,14 +2601,9 @@ PlaybackResponse postPlaybackStart(const String& storyId) {
 
   PlaybackResponse result;
 
-  if (!http.begin(url)) {
-    Serial.println("[PLAYBACK] start begin failed");
+  if (!beginBackendHttp(http, url, "PLAYBACK", true, false)) {
     return result;
   }
-
-  http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
-  http.setTimeout(HTTP_READ_TIMEOUT_MS);
-  addJsonHeaders(http);
 
   DynamicJsonDocument req(384);
   req["robotId"] = ROBOT_ID;
@@ -2683,14 +2625,9 @@ PlaybackResponse postPlaybackNext() {
 
   PlaybackResponse result;
 
-  if (!http.begin(url)) {
-    Serial.println("[PLAYBACK] next begin failed");
+  if (!beginBackendHttp(http, url, "PLAYBACK", true, false)) {
     return result;
   }
-
-  http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
-  http.setTimeout(HTTP_READ_TIMEOUT_MS);
-  addJsonHeaders(http);
 
   DynamicJsonDocument req(256);
   req["robotId"] = ROBOT_ID;
@@ -2714,15 +2651,8 @@ PlaybackResponse getReminderExecuteAudio(const String& reminderId) {
   HTTPClient http;
   String url = buildUrl(String("/api/reminders/") + reminderId + "/execute-audio");
 
-  if (!http.begin(url)) {
-    Serial.println("[REMINDER] execute-audio begin failed");
+  if (!beginBackendHttp(http, url, "REMINDER", false, true)) {
     return result;
-  }
-
-  http.setConnectTimeout(HTTP_CONNECT_TIMEOUT_MS);
-  http.setTimeout(HTTP_READ_TIMEOUT_MS);
-  if (strlen(AUTH_BEARER_TOKEN) > 0) {
-    http.addHeader("Authorization", String("Bearer ") + AUTH_BEARER_TOKEN);
   }
 
   int code = http.GET();
@@ -2800,8 +2730,7 @@ void preemptForReminderPriority() {
     g_qaStep = QA_STEP_IDLE;
     g_qaStepStartMs = 0;
     g_qaRecordStartMs = 0;
-    resetQaCaptureState();
-    resetQaWsFlags();
+    resetQaSessionState();
     g_state = STATE_IDLE;
     g_resumeStateAfterQa = STATE_IDLE;
     g_lastQaFinishMs = millis();
@@ -2842,11 +2771,8 @@ void onReminderCreate(const String& reminderId) {
     stopReminderBlink();
 
     if (!res.ok) {
-      Serial.printf("[CMD] REMINDER_CREATE attempt=%u/%u failed status=%d reminderId=%s\n",
-                    (unsigned)attempt,
-                    (unsigned)REMINDER_REPEAT_COUNT,
-                    res.httpCode,
-                    reminderId.c_str());
+      Serial.printf("[CMD] REMINDER_CREATE attempt=%u/%u failed status=%d reminderId=%s\n", (unsigned)attempt,
+                    (unsigned)REMINDER_REPEAT_COUNT, res.httpCode, reminderId.c_str());
       if (attempt == REMINDER_REPEAT_COUNT) {
         setStatusColor(ST77XX_RED);
         showTextOnTft("Reminder audio failed");
@@ -2854,13 +2780,8 @@ void onReminderCreate(const String& reminderId) {
     } else {
       playedAtLeastOne = true;
       Serial.printf("[CMD] REMINDER_CREATE attempt=%u/%u played status=%d bytes=%d mime=%s sr=%d ch=%d\n",
-                    (unsigned)attempt,
-                    (unsigned)REMINDER_REPEAT_COUNT,
-                    res.httpCode,
-                    res.bytesLength,
-                    res.mimeType.c_str(),
-                    res.sampleRate,
-                    res.channels);
+                    (unsigned)attempt, (unsigned)REMINDER_REPEAT_COUNT, res.httpCode, res.bytesLength,
+                    res.mimeType.c_str(), res.sampleRate, res.channels);
     }
 
     if (res.interrupted || g_state == STATE_INTERRUPT_QA || g_stopRequested) {
@@ -2874,9 +2795,7 @@ void onReminderCreate(const String& reminderId) {
 
     if (attempt < REMINDER_REPEAT_COUNT) {
       Serial.printf("[CMD] REMINDER_CREATE wait next replay %lums (attempt %u/%u)\n",
-                    (unsigned long)REMINDER_REPEAT_INTERVAL_MS,
-                    (unsigned)attempt,
-                    (unsigned)REMINDER_REPEAT_COUNT);
+                    (unsigned long)REMINDER_REPEAT_INTERVAL_MS, (unsigned)attempt, (unsigned)REMINDER_REPEAT_COUNT);
       unsigned long waitStart = millis();
       while ((millis() - waitStart) < REMINDER_REPEAT_INTERVAL_MS) {
         if (g_stopRequested || g_state == STATE_INTERRUPT_QA) {
@@ -2915,8 +2834,8 @@ void executeCommand(const PulledCommand& cmd) {
     return;
   }
 
-  Serial.printf("[CMD] id=%s type=%s storyId=%s reminderId=%s\n",
-                cmd.commandId.c_str(), cmd.type.c_str(), cmd.storyId.c_str(), cmd.reminderId.c_str());
+  Serial.printf("[CMD] id=%s type=%s storyId=%s reminderId=%s\n", cmd.commandId.c_str(), cmd.type.c_str(),
+                cmd.storyId.c_str(), cmd.reminderId.c_str());
 
   if (cmd.type == "START_STORY") {
     onStartStory(cmd.storyId);
@@ -2974,7 +2893,158 @@ void tickStoryPlayback() {
   }
 }
 
-// ========================= 11) WS QA FLOW =========================
+// ========================= 11) QA INTERRUPT STATE MACHINE =========================
+static void handleQaWaitWs(unsigned long now) {
+  if (g_wsConnected) {
+    if (!sendWsHello()) {
+      finishQaInterrupt(false, "qa_hello_send_fail");
+      return;
+    }
+    g_qaStep = QA_STEP_WAIT_HELLO_ACK;
+    g_qaStepStartMs = now;
+    showTextOnTft("QA hello...", ST77XX_BLUE);
+  } else if (now - g_qaStepStartMs > QA_STEP_TIMEOUT_MS) {
+    finishQaInterrupt(false, "qa_ws_connect_timeout");
+  }
+}
+
+static void handleQaWaitHelloAck(unsigned long now) {
+  if (g_wsHelloAck) {
+    if (!sendWsAudioStart()) {
+      finishQaInterrupt(false, "qa_audio_start_send_fail");
+      return;
+    }
+    g_qaStep = QA_STEP_WAIT_AUDIO_START_ACK;
+    g_qaStepStartMs = now;
+  } else if (now - g_qaStepStartMs > QA_STEP_TIMEOUT_MS) {
+    finishQaInterrupt(false, "qa_hello_ack_timeout");
+  }
+}
+
+static void handleQaWaitAudioStartAck(unsigned long now) {
+  if (g_wsAudioStartAck) {
+    resetQaCaptureState();
+    g_qaStep = QA_STEP_STREAM_MIC;
+    g_qaRecordStartMs = now;
+    g_qaStepStartMs = now;
+    showTextOnTft("QA waiting speech...", ST77XX_BLUE);
+  } else if (now - g_qaStepStartMs > QA_STEP_TIMEOUT_MS) {
+    finishQaInterrupt(false, "qa_audio_start_ack_timeout");
+  }
+}
+
+static void handleQaStreamMic(unsigned long now) {
+  if (isSpeakerLikelyActive(QA_CAPTURE_SPEAKER_GUARD_MS)) {
+    g_qaSpeechHitCount = 0;
+    g_qaRecordStartMs = now;
+    return;
+  }
+
+  uint8_t micBuf[QA_MIC_CHUNK_BYTES];
+  size_t readBytes = 0;
+  esp_err_t err = i2s_read(I2S_NUM_1, micBuf, QA_MIC_CHUNK_BYTES, &readBytes, 20 / portTICK_PERIOD_MS);
+  if (err != ESP_OK || readBytes == 0) {
+    unsigned long waitMs = now - g_qaRecordStartMs;
+    if (waitMs > QA_WAIT_SPEECH_TIMEOUT_MS) {
+      restartQaListeningAfterNoSpeech("qa_no_audio");
+      return;
+    }
+    if (now - g_qaRecordStartMs > QA_MAX_UTTERANCE_MS) {
+      finishQaInterrupt(false, "qa_mic_timeout");
+    }
+    return;
+  }
+  applyAecToMicFrame(micBuf, readBytes);
+
+  int frameAbs = 0;
+  int peakAbs = 0;
+  uint16_t zcr = 0;
+  float peakToAvg = 0.0f;
+  analyzePcm16Frame(micBuf, readBytes, frameAbs, peakAbs, zcr, peakToAvg);
+  int threshold = qaCurrentThresholdAbs();
+  bool zcrStrongOk = zcr >= QA_VAD_MIN_ZCR && zcr <= QA_VAD_MAX_ZCR;
+  bool zcrWeakOk = zcr >= QA_VAD_WEAK_MIN_ZCR && zcr <= QA_VAD_WEAK_MAX_ZCR;
+  bool peakShapeOk = peakToAvg > 0.0f && peakToAvg <= QA_VAD_MAX_PEAK_TO_AVG;
+  bool speechStrong = (frameAbs >= threshold) && zcrStrongOk && peakShapeOk;
+  bool speechWeak = (frameAbs >= (int)(threshold * 0.65f)) && zcrWeakOk && peakShapeOk;
+
+  if (!g_qaSpeechStarted) {
+    qaPushPreRoll(micBuf, readBytes);
+    unsigned long waitMs = now - g_qaRecordStartMs;
+    bool forceStart =
+        QA_ENABLE_FORCE_START && waitMs >= QA_FORCE_START_MS && g_qaSpeechHitCount >= QA_FORCE_START_MIN_HITS;
+
+    if (!speechStrong) {
+      qaUpdateNoiseFloor(frameAbs);
+    }
+
+    if (speechStrong) {
+      if (g_qaSpeechHitCount < 250) {
+        g_qaSpeechHitCount++;
+      }
+    } else if (g_qaSpeechHitCount > 0) {
+      if (frameAbs < (int)(threshold * 0.8f)) {
+        g_qaSpeechHitCount = 0;
+      } else {
+        g_qaSpeechHitCount--;
+      }
+    }
+
+    if (g_qaSpeechHitCount >= QA_SPEECH_HIT_FRAMES || forceStart) {
+      g_qaSpeechStarted = true;
+      g_qaSpeechStartMs = now;
+      g_qaLastSpeechMs = now;
+      qaFlushPreRollToWs();
+      Serial.printf("[QA] Speech started abs=%d zcr=%u ratio=%.2f threshold=%d mode=%s\n", frameAbs, (unsigned)zcr,
+                    peakToAvg, threshold, forceStart ? "force" : "vad");
+      showTextOnTft("QA recording...", ST77XX_BLUE);
+    } else if (waitMs > QA_WAIT_SPEECH_TIMEOUT_MS) {
+      restartQaListeningAfterNoSpeech("qa_no_speech");
+      return;
+    }
+    return;
+  }
+
+  g_ws.sendBIN(micBuf, readBytes);
+  g_qaSentAudioBytes += readBytes;
+
+  if (speechWeak) {
+    g_qaLastSpeechMs = now;
+  }
+
+  unsigned long utterMs = now - g_qaSpeechStartMs;
+  unsigned long silenceMs = now - g_qaLastSpeechMs;
+  bool endBySilence = (utterMs >= QA_MIN_UTTERANCE_MS) && (silenceMs >= QA_END_SILENCE_MS);
+  bool endByMaxLen = utterMs >= QA_MAX_UTTERANCE_MS;
+  if (endBySilence || endByMaxLen) {
+    unsigned long t1Ms = millis();
+    if (!sendWsAudioEnd()) {
+      finishQaInterrupt(false, "qa_audio_end_send_fail");
+      return;
+    }
+    g_latencyT1Ms = t1Ms;
+    g_latencyAwaitT5 = false;
+    g_latencyUtteranceSeq = g_qaUtteranceSeq;
+    Serial.printf("[LATENCY][T1] utteranceSeq=%lu t1Millis=%lu reason=%s utterMs=%lu silenceMs=%lu sentBytes=%u\n",
+                  (unsigned long)g_latencyUtteranceSeq, t1Ms, endBySilence ? "vad_silence" : "max_len", utterMs,
+                  silenceMs, (unsigned)g_qaSentAudioBytes);
+    Serial.printf("[QA] Speech ended utterMs=%lu silenceMs=%lu sentBytes=%u\n", utterMs, silenceMs,
+                  (unsigned)g_qaSentAudioBytes);
+    g_wsTtsEnd = false;
+    g_qaStep = QA_STEP_WAIT_TTS_END;
+    g_qaStepStartMs = now;
+    showTextOnTft("QA processing...", ST77XX_BLUE);
+  }
+}
+
+static void handleQaWaitTtsEnd(unsigned long now) {
+  if (g_wsTtsEnd) {
+    finishQaInterrupt(true, "qa_done");
+  } else if (now - g_qaStepStartMs > g_qaTtsWaitTimeoutMs) {
+    finishQaInterrupt(false, "qa_tts_timeout");
+  }
+}
+
 void tickInterruptQa() {
   if (g_state != STATE_INTERRUPT_QA) {
     return;
@@ -2997,166 +3067,20 @@ void tickInterruptQa() {
 
   switch (g_qaStep) {
     case QA_STEP_WAIT_WS:
-      if (g_wsConnected) {
-        if (!sendWsHello()) {
-          finishQaInterrupt(false, "qa_hello_send_fail");
-          return;
-        }
-        g_qaStep = QA_STEP_WAIT_HELLO_ACK;
-        g_qaStepStartMs = now;
-        showTextOnTft("QA hello...", ST77XX_BLUE);
-      } else if (now - g_qaStepStartMs > QA_STEP_TIMEOUT_MS) {
-        finishQaInterrupt(false, "qa_ws_connect_timeout");
-      }
+      handleQaWaitWs(now);
       break;
-
     case QA_STEP_WAIT_HELLO_ACK:
-      if (g_wsHelloAck) {
-        if (!sendWsAudioStart()) {
-          finishQaInterrupt(false, "qa_audio_start_send_fail");
-          return;
-        }
-        g_qaStep = QA_STEP_WAIT_AUDIO_START_ACK;
-        g_qaStepStartMs = now;
-      } else if (now - g_qaStepStartMs > QA_STEP_TIMEOUT_MS) {
-        finishQaInterrupt(false, "qa_hello_ack_timeout");
-      }
+      handleQaWaitHelloAck(now);
       break;
-
     case QA_STEP_WAIT_AUDIO_START_ACK:
-      if (g_wsAudioStartAck) {
-        resetQaCaptureState();
-        g_qaStep = QA_STEP_STREAM_MIC;
-        g_qaRecordStartMs = now;
-        g_qaStepStartMs = now;
-        showTextOnTft("QA waiting speech...", ST77XX_BLUE);
-      } else if (now - g_qaStepStartMs > QA_STEP_TIMEOUT_MS) {
-        finishQaInterrupt(false, "qa_audio_start_ack_timeout");
-      }
+      handleQaWaitAudioStartAck(now);
       break;
-
-    case QA_STEP_STREAM_MIC: {
-      if (isSpeakerLikelyActive(QA_CAPTURE_SPEAKER_GUARD_MS)) {
-        g_qaSpeechHitCount = 0;
-        g_qaRecordStartMs = now;
-        break;
-      }
-
-      uint8_t micBuf[QA_MIC_CHUNK_BYTES];
-      size_t readBytes = 0;
-      esp_err_t err = i2s_read(I2S_NUM_1, micBuf, QA_MIC_CHUNK_BYTES, &readBytes, 20 / portTICK_PERIOD_MS);
-      if (err != ESP_OK || readBytes == 0) {
-        unsigned long waitMs = now - g_qaRecordStartMs;
-        if (waitMs > QA_WAIT_SPEECH_TIMEOUT_MS) {
-          restartQaListeningAfterNoSpeech("qa_no_audio");
-          return;
-        }
-        if (now - g_qaRecordStartMs > QA_MAX_UTTERANCE_MS) {
-          finishQaInterrupt(false, "qa_mic_timeout");
-        }
-        break;
-      }
-      applyAecToMicFrame(micBuf, readBytes);
-
-      int frameAbs = 0;
-      int peakAbs = 0;
-      uint16_t zcr = 0;
-      float peakToAvg = 0.0f;
-      analyzePcm16Frame(micBuf, readBytes, frameAbs, peakAbs, zcr, peakToAvg);
-      int threshold = qaCurrentThresholdAbs();
-      bool zcrStrongOk = zcr >= QA_VAD_MIN_ZCR && zcr <= QA_VAD_MAX_ZCR;
-      bool zcrWeakOk = zcr >= QA_VAD_WEAK_MIN_ZCR && zcr <= QA_VAD_WEAK_MAX_ZCR;
-      bool peakShapeOk = peakToAvg > 0.0f && peakToAvg <= QA_VAD_MAX_PEAK_TO_AVG;
-      bool speechStrong = (frameAbs >= threshold) && zcrStrongOk && peakShapeOk;
-      bool speechWeak = (frameAbs >= (int)(threshold * 0.65f)) && zcrWeakOk && peakShapeOk;
-
-      if (!g_qaSpeechStarted) {
-        qaPushPreRoll(micBuf, readBytes);
-        unsigned long waitMs = now - g_qaRecordStartMs;
-        bool forceStart = QA_ENABLE_FORCE_START &&
-                          waitMs >= QA_FORCE_START_MS &&
-                          g_qaSpeechHitCount >= QA_FORCE_START_MIN_HITS;
-
-        if (!speechStrong) {
-          qaUpdateNoiseFloor(frameAbs);
-        }
-
-        if (speechStrong) {
-          if (g_qaSpeechHitCount < 250) {
-            g_qaSpeechHitCount++;
-          }
-        } else if (g_qaSpeechHitCount > 0) {
-          if (frameAbs < (int)(threshold * 0.8f)) {
-            g_qaSpeechHitCount = 0;
-          } else {
-            g_qaSpeechHitCount--;
-          }
-        }
-
-        if (g_qaSpeechHitCount >= QA_SPEECH_HIT_FRAMES || forceStart) {
-          g_qaSpeechStarted = true;
-          g_qaSpeechStartMs = now;
-          g_qaLastSpeechMs = now;
-          qaFlushPreRollToWs();
-          Serial.printf("[QA] Speech started abs=%d zcr=%u ratio=%.2f threshold=%d mode=%s\n",
-                        frameAbs,
-                        (unsigned)zcr,
-                        peakToAvg,
-                        threshold,
-                        forceStart ? "force" : "vad");
-          showTextOnTft("QA recording...", ST77XX_BLUE);
-        } else if (waitMs > QA_WAIT_SPEECH_TIMEOUT_MS) {
-          restartQaListeningAfterNoSpeech("qa_no_speech");
-          return;
-        }
-        break;
-      }
-
-      g_ws.sendBIN(micBuf, readBytes);
-      g_qaSentAudioBytes += readBytes;
-
-      if (speechWeak) {
-        g_qaLastSpeechMs = now;
-      }
-
-      unsigned long utterMs = now - g_qaSpeechStartMs;
-      unsigned long silenceMs = now - g_qaLastSpeechMs;
-      bool endBySilence = (utterMs >= QA_MIN_UTTERANCE_MS) && (silenceMs >= QA_END_SILENCE_MS);
-      bool endByMaxLen = utterMs >= QA_MAX_UTTERANCE_MS;
-      if (endBySilence || endByMaxLen) {
-        unsigned long t1Ms = millis();
-        if (!sendWsAudioEnd()) {
-          finishQaInterrupt(false, "qa_audio_end_send_fail");
-          return;
-        }
-        g_latencyT1Ms = t1Ms;
-        g_latencyAwaitT5 = false;
-        g_latencyUtteranceSeq = g_qaUtteranceSeq;
-        Serial.printf("[LATENCY][T1] utteranceSeq=%lu t1Millis=%lu reason=%s utterMs=%lu silenceMs=%lu sentBytes=%u\n",
-                      (unsigned long)g_latencyUtteranceSeq,
-                      t1Ms,
-                      endBySilence ? "vad_silence" : "max_len",
-                      utterMs,
-                      silenceMs,
-                      (unsigned)g_qaSentAudioBytes);
-        Serial.printf("[QA] Speech ended utterMs=%lu silenceMs=%lu sentBytes=%u\n",
-                      utterMs, silenceMs, (unsigned)g_qaSentAudioBytes);
-        g_wsTtsEnd = false;
-        g_qaStep = QA_STEP_WAIT_TTS_END;
-        g_qaStepStartMs = now;
-        showTextOnTft("QA processing...", ST77XX_BLUE);
-      }
+    case QA_STEP_STREAM_MIC:
+      handleQaStreamMic(now);
       break;
-    }
-
     case QA_STEP_WAIT_TTS_END:
-      if (g_wsTtsEnd) {
-        finishQaInterrupt(true, "qa_done");
-      } else if (now - g_qaStepStartMs > g_qaTtsWaitTimeoutMs) {
-        finishQaInterrupt(false, "qa_tts_timeout");
-      }
+      handleQaWaitTtsEnd(now);
       break;
-
     case QA_STEP_IDLE:
     default:
       finishQaInterrupt(false, "qa_invalid_step");
@@ -3170,8 +3094,8 @@ void setup() {
   delay(800);
 
   Serial.println("\n=== robotic_esp32 firmware boot ===");
-  Serial.printf("[CFG] robotId=%s sessionId=%s backend=%s ws=%s:%u\n",
-                ROBOT_ID, SESSION_ID, BACKEND_BASE_URL, WS_HOST, WS_PORT);
+  Serial.printf("[CFG] robotId=%s sessionId=%s backend=%s ws=%s:%u\n", ROBOT_ID, SESSION_ID, BACKEND_BASE_URL, WS_HOST,
+                WS_PORT);
   initHardware();
   ensureWifiConnected();
   initWsQaClient();

@@ -10,8 +10,11 @@ import com.java.edtech.api.conversation.dto.CreateConversationSessionRequest;
 import com.java.edtech.api.conversation.dto.CreateMessageRequest;
 import com.java.edtech.api.conversation.dto.MessageCursorResponse;
 import com.java.edtech.api.conversation.dto.MessageResponse;
+import com.java.edtech.api.conversation.dto.RobotChatRequest;
+import com.java.edtech.api.conversation.dto.RobotChatResponse;
 import com.java.edtech.service.conversation.ConversationService;
 import com.java.edtech.service.conversation.MessageService;
+import com.java.edtech.service.conversation.RobotChatService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
@@ -34,6 +37,7 @@ public class ConversationController {
 
     private final ConversationService conversationService;
     private final MessageService messageService;
+    private final RobotChatService robotChatService;
 
     @PostMapping("/sessions")
     public ResponseEntity<ConversationApiResponse<ConversationSessionResponse>> createSession(
@@ -88,6 +92,22 @@ public class ConversationController {
         log.info("API addMessage success messageId={} sessionId={} role={}",
                 response.getId(), response.getSessionId(), response.getRole());
         return ResponseEntity.ok(response);
+    }
+
+    @PostMapping("/sessions/{sessionId}/chat")
+    public ResponseEntity<ConversationApiResponse<RobotChatResponse>> chatWithRobot(
+            @PathVariable UUID sessionId,
+            @Valid @RequestBody RobotChatRequest request
+    ) {
+        log.info("API chatWithRobot sessionId={} messageLength={}",
+                sessionId,
+                request.getMessage() == null ? 0 : request.getMessage().length());
+        RobotChatResponse response = robotChatService.chat(sessionId, request);
+        log.info("API chatWithRobot success sessionId={} userMessageId={} assistantMessageId={}",
+                sessionId,
+                response.getUserMessage().getId(),
+                response.getAssistantMessage().getId());
+        return ResponseEntity.ok(ConversationApiResponse.ok("Robot chat completed", response));
     }
 
     @GetMapping("/sessions/{sessionId}/messages")

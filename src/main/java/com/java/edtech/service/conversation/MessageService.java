@@ -13,13 +13,13 @@ import com.java.edtech.common.exception.AppException;
 import com.java.edtech.common.exception.ErrorCode;
 import com.java.edtech.domain.entity.ConversationSession;
 import com.java.edtech.domain.entity.Message;
+import com.java.edtech.domain.enums.EmotionType;
 import com.java.edtech.domain.enums.MessageRole;
 import com.java.edtech.repository.MessageRepository;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -36,14 +36,27 @@ public class MessageService {
         log.info("SERVICE addMessage sessionId={} role={} contentLength={}",
                 sessionId, request.getRole(), request.getContent() == null ? 0 : request.getContent().length());
         ConversationSession session = conversationService.getSessionEntity(sessionId);
+        MessageResponse saved = addMessage(session, request.getRole(), request.getContent(), request.getEmotion());
+        log.info("SERVICE addMessage saved messageId={} sessionId={}", saved.getId(), sessionId);
+        return saved;
+    }
+
+    @Transactional
+    public MessageResponse addMessage(ConversationSession session, MessageRole role, String content, EmotionType emotion) {
+        if (role == null) {
+            throw new AppException(ErrorCode.VALIDATION_ERROR, "role is required");
+        }
+        if (content == null || content.isBlank()) {
+            throw new AppException(ErrorCode.VALIDATION_ERROR, "content is required");
+        }
         Message message = new Message();
         message.setSession(session);
         message.setRobot(session.getRobot());
-        message.setRole(request.getRole());
-        message.setContent(request.getContent().trim());
-        message.setEmotion(request.getEmotion());
+        message.setRole(role);
+        message.setContent(content.trim());
+        message.setEmotion(emotion);
         Message saved = messageRepository.save(message);
-        log.info("SERVICE addMessage saved messageId={} sessionId={}", saved.getId(), sessionId);
+        log.info("SERVICE addMessage saved messageId={} sessionId={}", saved.getId(), session.getId());
         return toResponse(saved);
     }
 
