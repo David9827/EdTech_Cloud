@@ -1,0 +1,25 @@
+services:
+  stt:
+    build:
+      context: ./stt
+    container_name: edtech-stt
+    gpus: all
+    ports:
+      - "8001:8001"
+    environment:
+      WHISPER_MODEL: small
+      WHISPER_DEVICE: cuda
+      WHISPER_COMPUTE_TYPE: float16
+      WHISPER_LANGUAGE: vi
+
+  tts:
+    build:
+      context: ./tts
+    container_name: edtech-tts
+    ports:
+      - "8002:8002"
+    environment:
+      PIPER_BIN: /opt/piper/piper
+      PIPER_MODEL: /models/vi_voice.onnx
+    volumes:
+      - ./models:/models:ro

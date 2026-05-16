@@ -9,6 +9,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
+#include <TFT_22_ILI9225.h>
 
 /*
   ============================================================
@@ -30,20 +31,22 @@
   ============================================================
 */
 
-// ========================= 1 USER CONFIG =========================
+// ========================= 1) USER CONFIG =========================
 static const char* WIFI_SSID = "cong";
 static const char* WIFI_PASS = "27042004";
 
+// Example: "http://192.168.1.20:8080"
 static const char* BACKEND_BASE_URL = "http://172.20.10.3:5999";
 
 // Robot identity from backend DB
 static const char* ROBOT_ID = "4f864132-2c3f-4fff-9811-19a840e93473";
-static const char* SESSION_ID = "10000000-0000-0000-0000-000000000001";
+static const char* SESSION_ID = "10000000-0000-0000-0000-000000000001"; // WS session id should be UUID.
 
-// Optional WS QA endpoint
+// Optional WS QA endpoint (not used by polling flow yet)
 static const char* WS_HOST = "172.20.10.3";
 static const uint16_t WS_PORT = 5999;
 
+// Optional Bearer token. Keep empty if backend does not require auth.
 static const char* AUTH_BEARER_TOKEN = "";
 
 // Timeouts (ms)
@@ -67,8 +70,8 @@ static const uint32_t QA_MIN_UTTERANCE_MS = 500;
 static const uint32_t QA_END_SILENCE_MS = 850;
 static const uint8_t QA_SPEECH_HIT_FRAMES = 2;
 static const uint8_t QA_PREROLL_FRAMES = 12;
-static const int QA_VAD_MIN_ABS = 205;
-static const float QA_VAD_THRESHOLD_MULTIPLIER = 1.36f;
+static const int QA_VAD_MIN_ABS = 180;
+static const float QA_VAD_THRESHOLD_MULTIPLIER = 1.28f;
 static const float QA_VAD_NOISE_EMA_ALPHA = 0.06f;
 static const uint16_t QA_VAD_MIN_ZCR = 6;
 static const uint16_t QA_VAD_MAX_ZCR = 140;
@@ -79,25 +82,25 @@ static const bool AUTO_QA_ENABLED = true;
 static const bool AUTO_QA_LISTEN_IN_IDLE = true;
 static const bool AUTO_QA_LISTEN_DURING_STORY = true;
 static const uint32_t AUTO_QA_COOLDOWN_MS = 1200;
-static const uint8_t AUTO_QA_HIT_FRAMES = 3;
-static const int AUTO_QA_MIN_ABS = 205;
-static const float AUTO_QA_THRESHOLD_MULTIPLIER = 1.34f;
+static const uint8_t AUTO_QA_HIT_FRAMES = 2;
+static const int AUTO_QA_MIN_ABS = 190;
+static const float AUTO_QA_THRESHOLD_MULTIPLIER = 1.28f;
 static const float AUTO_QA_NOISE_EMA_ALPHA = 0.06f;
 static const uint16_t AUTO_QA_MIN_ZCR = 7;
 static const uint16_t AUTO_QA_MAX_ZCR = 145;
 static const float AUTO_QA_MAX_PEAK_TO_AVG = 15.0f;
-static const uint8_t AUTO_QA_STORY_HIT_FRAMES = 6;
-static const int AUTO_QA_STORY_MIN_ABS = 290;
-static const float AUTO_QA_STORY_THRESHOLD_MULTIPLIER = 2.00f;
+static const uint8_t AUTO_QA_STORY_HIT_FRAMES = 4;
+static const int AUTO_QA_STORY_MIN_ABS = 220;
+static const float AUTO_QA_STORY_THRESHOLD_MULTIPLIER = 1.55f;
 static const uint16_t AUTO_QA_STORY_MIN_ZCR = 8;
 static const uint16_t AUTO_QA_STORY_MAX_ZCR = 145;
 static const float AUTO_QA_STORY_MAX_PEAK_TO_AVG = 12.0f;
 static const float AUTO_QA_STORY_MIN_PEAK_TO_AVG = 1.20f;
-static const bool AUTO_QA_ALLOW_BARGE_IN_DURING_QA_TTS = false;
+static const bool AUTO_QA_ALLOW_BARGE_IN_DURING_QA_TTS = true;
 static const uint32_t AUTO_QA_QA_TTS_GUARD_MS = 350;
-static const int AUTO_QA_QA_TTS_MIN_ABS = 260;
-static const float AUTO_QA_QA_TTS_THRESHOLD_MULTIPLIER = 1.75f;
-static const uint8_t AUTO_QA_QA_TTS_HIT_FRAMES = 5;
+static const int AUTO_QA_QA_TTS_MIN_ABS = 320;
+static const float AUTO_QA_QA_TTS_THRESHOLD_MULTIPLIER = 2.10f;
+static const uint8_t AUTO_QA_QA_TTS_HIT_FRAMES = 7;
 static const uint16_t AUDIO_OUT_CHUNK_BYTES = 512;
 static const uint16_t AUDIO_OUT_QUEUE_DEPTH = 96;
 static const uint32_t AUDIO_OUT_ENQUEUE_TIMEOUT_MS = 80;
@@ -113,8 +116,12 @@ static const uint32_t COMMAND_PULL_INTERVAL_MS = 1000;
 static const uint8_t COMMAND_QUEUE_DEPTH = 8;
 static const uint32_t AUTO_QA_SPEAKER_GUARD_MS = 900;
 static const uint32_t QA_CAPTURE_SPEAKER_GUARD_MS = 600;
-static const int AUTO_QA_STORY_REF_MIN_ABS = 120;
-static const float AUTO_QA_STORY_MIN_MIC_TO_REF_RATIO = 0.86f;
+static const bool QA_CAPTURE_USE_AEC = false;
+static const int AUTO_QA_STORY_REF_MIN_ABS = 170;
+static const float AUTO_QA_STORY_MIN_MIC_TO_REF_RATIO = 0.58f;
+static const bool AUTO_QA_STORY_DETECT_USE_AEC = false;
+static const int AUTO_QA_QA_TTS_REF_MIN_ABS = 170;
+static const float AUTO_QA_QA_TTS_MIN_MIC_TO_REF_RATIO = 0.90f;
 static const uint8_t REMINDER_REPEAT_COUNT = 3;
 static const uint32_t REMINDER_REPEAT_INTERVAL_MS = 30000;
 static const uint32_t REMINDER_LED_BLINK_INTERVAL_MS = 240;
@@ -125,12 +132,12 @@ static const float AEC_ADAPT_RATE = 0.18f;
 static const int AEC_ADAPT_MIN_REF_ABS = 110;
 static const float AEC_MAX_ECHO_GAIN = 1.6f;
 static const bool TFT_THROTTLE_UI_FOR_AUDIO = true;
-static const uint32_t TFT_UI_FRAME_MIN_INTERVAL_MS = 85;
+static const uint32_t TFT_UI_FRAME_MIN_INTERVAL_MS = 120;
 // ILI9225 native is 176x220. We use landscape (orientation=1) to keep old UI layout.
 static const int TFT_SCREEN_W = 220;
 static const int TFT_SCREEN_H = 176;
 
-// ========================= 1.1 PIN MAP  =========================
+// ========================= 1.1) PIN MAP (from robot_example.ino) =========================
 #define I2S_MIC_WS 6
 #define I2S_MIC_SCK 5
 #define I2S_MIC_SD 4
@@ -145,7 +152,7 @@ static const int TFT_SCREEN_H = 176;
 #define TFT_RS 13
 #define TFT_CS 14
 #define TFT_LED 0
-
+// Keep existing code paths compatible with old symbol names.
 #define TFT_DC TFT_RS
 #define TFT_BLK TFT_LED
 
@@ -156,7 +163,7 @@ static const int TFT_SCREEN_H = 176;
 static const bool BOOT_BUTTON_ACTIVE_LOW = true;
 static const bool BOOT_BUTTON_TOGGLE_ENABLED = false; // Use Serial 'B'/'b' only.
 
-// ========================= 2 APP STATE =========================
+// ========================= 2) APP STATE =========================
 enum RobotState {
   STATE_IDLE = 0,
   STATE_STORY_PLAYING = 1,
@@ -227,11 +234,6 @@ const EyeFrame kIdleEyeFrames[] = {
 bool g_eyeAnimActive = false;
 uint8_t g_eyeFrameIndex = 0;
 unsigned long g_eyeFrameStartMs = 0;
-bool g_eyeRenderCacheValid = false;
-int g_eyeRenderX1 = 0;
-int g_eyeRenderY1 = 0;
-int g_eyeRenderX2 = 0;
-int g_eyeRenderY2 = 0;
 bool g_listeningFaceShown = false;
 bool g_neutralFaceShown = false;
 uint8_t g_listeningBrowPhase = 0;
@@ -507,16 +509,11 @@ void tftDrawMultilineText(int x, int y, const String& text, uint16_t color) {
   }
 }
 
-void resetEyeRenderCache() {
-  g_eyeRenderCacheValid = false;
-}
-
 void showTextOnTft(const String& message, uint16_t color = ST77XX_WHITE) {
   if (!g_tftReady || !g_textUiEnabled) {
     return;
   }
 
-  resetEyeRenderCache();
   g_eyeAnimActive = false;
   g_lastUiTextMs = millis();
   tftFillScreen(ST77XX_BLACK);
@@ -528,7 +525,6 @@ void showWifiStatusOnTft(const String& message, uint16_t color = ST77XX_WHITE) {
     return;
   }
 
-  resetEyeRenderCache();
   tftFillScreen(ST77XX_BLACK);
   tftDrawMultilineText(2, 24, message, color);
 }
@@ -547,7 +543,6 @@ void onFirstWifiConnected() {
   const unsigned long now = millis();
   g_lastUiTextMs = (now > EYE_TEXT_HOLD_MS) ? (now - EYE_TEXT_HOLD_MS) : 0;
   if (g_tftReady) {
-    resetEyeRenderCache();
     tftFillScreen(EYE_BG_COLOR);
   }
 }
@@ -582,49 +577,6 @@ void drawRobotEyebrows(int leftX, int rightX, int eyeWidth, int eyeTopY, int bro
   }
 }
 
-void computeEyeRenderBounds(int leftX,
-                            int rightX,
-                            int eyeWidth,
-                            int y,
-                            int height,
-                            int browLift,
-                            int browTilt,
-                            bool isHappy,
-                            int& outX1,
-                            int& outY1,
-                            int& outX2,
-                            int& outY2) {
-  int lift = browLift;
-  int tilt = browTilt;
-  if (lift < -4) {
-    lift = -4;
-  } else if (lift > 8) {
-    lift = 8;
-  }
-  if (tilt < -8) {
-    tilt = -8;
-  } else if (tilt > 8) {
-    tilt = 8;
-  }
-  if (isHappy && tilt > 0) {
-    tilt = 0;
-  }
-
-  int browBaseY = y - 18 - lift;
-  int browTopY = browBaseY + (tilt < 0 ? tilt : 0);
-  int browBottomY = browBaseY + 3 + (tilt > 0 ? tilt : 0);
-
-  int eyeBottomY = y + height - 1;
-  if (isHappy) {
-    eyeBottomY += 28;
-  }
-
-  outX1 = leftX - 10;
-  outX2 = rightX + eyeWidth + 10;
-  outY1 = browTopY - 4;
-  outY2 = (eyeBottomY > browBottomY ? eyeBottomY : browBottomY) + 4;
-}
-
 void drawRobotEyes(int offsetX, int offsetY, int height, bool isHappy, int browLift, int browTilt) {
   if (!g_tftReady) {
     return;
@@ -641,23 +593,9 @@ void drawRobotEyes(int offsetX, int offsetY, int height, bool isHappy, int browL
   const int leftX = EYE_LEFT_X_BASE + offsetX;
   const int rightX = EYE_RIGHT_X_BASE + offsetX;
   const int y = EYE_BASE_Y + offsetY + (normalHeight - height) / 2;
-  int newX1 = 0;
-  int newY1 = 0;
-  int newX2 = 0;
-  int newY2 = 0;
-  computeEyeRenderBounds(
-      leftX, rightX, eyeWidth, y, height, browLift, browTilt, isHappy,
-      newX1, newY1, newX2, newY2);
 
-  if (g_eyeRenderCacheValid) {
-    int clearX1 = g_eyeRenderX1 < newX1 ? g_eyeRenderX1 : newX1;
-    int clearY1 = g_eyeRenderY1 < newY1 ? g_eyeRenderY1 : newY1;
-    int clearX2 = g_eyeRenderX2 > newX2 ? g_eyeRenderX2 : newX2;
-    int clearY2 = g_eyeRenderY2 > newY2 ? g_eyeRenderY2 : newY2;
-    tftFillRectXYWH(clearX1, clearY1, (clearX2 - clearX1 + 1), (clearY2 - clearY1 + 1), EYE_BG_COLOR);
-  } else {
-    tftFillRectXYWH(newX1, newY1, (newX2 - newX1 + 1), (newY2 - newY1 + 1), EYE_BG_COLOR);
-  }
+  // Clear full eye band to avoid residual pixels on left/right edges.
+  tftFillRectXYWH(0, 12, TFT_SCREEN_W, 132, EYE_BG_COLOR);
 
   tftFillRoundRectCompat(leftX, y, eyeWidth, height, EYE_CORNER_RADIUS, EYE_COLOR);
   tftFillRoundRectCompat(rightX, y, eyeWidth, height, EYE_CORNER_RADIUS, EYE_COLOR);
@@ -668,11 +606,6 @@ void drawRobotEyes(int offsetX, int offsetY, int height, bool isHappy, int browL
   }
 
   drawRobotEyebrows(leftX, rightX, eyeWidth, y, browLift, browTilt, isHappy);
-  g_eyeRenderX1 = newX1;
-  g_eyeRenderY1 = newY1;
-  g_eyeRenderX2 = newX2;
-  g_eyeRenderY2 = newY2;
-  g_eyeRenderCacheValid = true;
 }
 
 void drawListeningEyes(uint8_t phase) {
@@ -1462,7 +1395,6 @@ void drawStatsOverlay(bool forceDraw) {
 void toggleStatsOverlay() {
   g_statsOverlayEnabled = !g_statsOverlayEnabled;
   g_statsLastDrawMs = 0;
-  resetEyeRenderCache();
 
   if (g_statsOverlayEnabled) {
     g_eyeAnimActive = false;
@@ -1931,15 +1863,12 @@ void resetAutoQaDetector() {
 }
 
 bool autoQaCanListenNow() {
-  if (g_state != STATE_STORY_PLAYING && isSpeakerLikelyActive(AUTO_QA_SPEAKER_GUARD_MS)) {
-    return false;
-  }
-
+  bool qaTtsBargeInMode = (g_state == STATE_INTERRUPT_QA && g_qaStep == QA_STEP_WAIT_TTS_END);
   if (g_state == STATE_INTERRUPT_QA) {
     if (!AUTO_QA_ALLOW_BARGE_IN_DURING_QA_TTS) {
       return false;
     }
-    if (g_qaStep != QA_STEP_WAIT_TTS_END) {
+    if (!qaTtsBargeInMode) {
       return false;
     }
     if (g_wsTtsStartMs > 0 && (millis() - g_wsTtsStartMs) < AUTO_QA_QA_TTS_GUARD_MS) {
@@ -1947,6 +1876,11 @@ bool autoQaCanListenNow() {
     }
     return true;
   }
+
+  if (g_state != STATE_STORY_PLAYING && isSpeakerLikelyActive(AUTO_QA_SPEAKER_GUARD_MS)) {
+    return false;
+  }
+
   if (g_state == STATE_STORY_PLAYING) {
     return AUTO_QA_LISTEN_DURING_STORY;
   }
@@ -1969,8 +1903,9 @@ void tickAutoQaTrigger() {
   if (now - g_lastQaFinishMs < AUTO_QA_COOLDOWN_MS) {
     return;
   }
+  bool qaTtsBargeInMode = (g_state == STATE_INTERRUPT_QA && g_qaStep == QA_STEP_WAIT_TTS_END);
   bool speakerActive = isSpeakerLikelyActive(AUTO_QA_SPEAKER_GUARD_MS);
-  if (g_state != STATE_STORY_PLAYING && speakerActive) {
+  if (g_state != STATE_STORY_PLAYING && !qaTtsBargeInMode && speakerActive) {
     resetAutoQaDetector();
     return;
   }
@@ -1980,7 +1915,10 @@ void tickAutoQaTrigger() {
   if (err != ESP_OK || readBytes == 0) {
     return;
   }
-  applyAecToMicFrame(micBuf, readBytes);
+  bool storyBargeInMode = (g_state == STATE_STORY_PLAYING);
+  if (!storyBargeInMode || AUTO_QA_STORY_DETECT_USE_AEC) {
+    applyAecToMicFrame(micBuf, readBytes);
+  }
 
   int frameAbs = 0;
   int peakAbs = 0;
@@ -1993,8 +1931,6 @@ void tickAutoQaTrigger() {
   if (thresholdF < (float)AUTO_QA_MIN_ABS) {
     thresholdF = (float)AUTO_QA_MIN_ABS;
   }
-  bool storyBargeInMode = (g_state == STATE_STORY_PLAYING);
-
   if (storyBargeInMode) {
     float storyThresholdF = g_autoQaNoiseEma * AUTO_QA_STORY_THRESHOLD_MULTIPLIER;
     if (storyThresholdF < (float)AUTO_QA_STORY_MIN_ABS) {
@@ -2021,18 +1957,21 @@ void tickAutoQaTrigger() {
   bool speechStrong = frameAbs >= threshold;
   bool zcrOk = zcr >= AUTO_QA_MIN_ZCR && zcr <= AUTO_QA_MAX_ZCR;
   bool peakShapeOk = peakToAvg > 0.0f && peakToAvg <= AUTO_QA_MAX_PEAK_TO_AVG;
-  if (storyBargeInMode) {
+  if (storyBargeInMode || qaTtsBargeInMode) {
     zcrOk = zcr >= AUTO_QA_STORY_MIN_ZCR && zcr <= AUTO_QA_STORY_MAX_ZCR;
     peakShapeOk = peakToAvg >= AUTO_QA_STORY_MIN_PEAK_TO_AVG && peakToAvg <= AUTO_QA_STORY_MAX_PEAK_TO_AVG;
   }
   bool speechCandidate = speechStrong && zcrOk && peakShapeOk;
   bool rejectedByEchoDominance = false;
   int refAbs = 0;
-  if (storyBargeInMode && speakerActive && readBytes >= 2) {
+  float micToRefRatio = 0.0f;
+  if ((storyBargeInMode || qaTtsBargeInMode) && speakerActive && readBytes >= 2) {
     refAbs = estimateAecReferenceAbs(readBytes / 2);
-    if (refAbs >= AUTO_QA_STORY_REF_MIN_ABS) {
-      float micToRefRatio = (float)frameAbs / (float)refAbs;
-      if (micToRefRatio < AUTO_QA_STORY_MIN_MIC_TO_REF_RATIO) {
+    int refMinAbs = storyBargeInMode ? AUTO_QA_STORY_REF_MIN_ABS : AUTO_QA_QA_TTS_REF_MIN_ABS;
+    float minMicToRef = storyBargeInMode ? AUTO_QA_STORY_MIN_MIC_TO_REF_RATIO : AUTO_QA_QA_TTS_MIN_MIC_TO_REF_RATIO;
+    if (refAbs >= refMinAbs) {
+      micToRefRatio = (float)frameAbs / (float)refAbs;
+      if (micToRefRatio < minMicToRef) {
         rejectedByEchoDominance = true;
         speechCandidate = false;
       }
@@ -2056,9 +1995,9 @@ void tickAutoQaTrigger() {
   }
 
   if (g_autoQaSpeechHits >= requiredHits) {
-    if (storyBargeInMode && speakerActive) {
-      Serial.printf("[AUTO_QA] Voice trigger abs=%d refAbs=%d zcr=%u ratio=%.2f threshold=%d state=%d\n",
-                    frameAbs, refAbs, (unsigned)zcr, peakToAvg, threshold, (int)g_state);
+    if ((storyBargeInMode || qaTtsBargeInMode) && speakerActive) {
+      Serial.printf("[AUTO_QA] Voice trigger abs=%d refAbs=%d micRef=%.2f zcr=%u ratio=%.2f threshold=%d state=%d\n",
+                    frameAbs, refAbs, micToRefRatio, (unsigned)zcr, peakToAvg, threshold, (int)g_state);
     } else {
       Serial.printf("[AUTO_QA] Voice trigger abs=%d zcr=%u ratio=%.2f threshold=%d state=%d\n",
                     frameAbs, (unsigned)zcr, peakToAvg, threshold, (int)g_state);
@@ -3053,7 +2992,9 @@ void tickInterruptQa() {
         }
         break;
       }
-      applyAecToMicFrame(micBuf, readBytes);
+      if (QA_CAPTURE_USE_AEC) {
+        applyAecToMicFrame(micBuf, readBytes);
+      }
 
       int frameAbs = 0;
       int peakAbs = 0;
